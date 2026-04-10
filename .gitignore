@@ -1,0 +1,39 @@
+# Environment variables (contains secrets)
+.env.trading
+.env
+
+# Logs
+*.log
+logs/
+auto_trade.log
+
+# Trading data
+.trading_stopped
+
+# OS files
+.DS_Store
+Thumbs.db
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Build outputs
+dist/
+build/
+
+# Test files
+*.test
+.coverage
+
+# Local config
+config.local.json
