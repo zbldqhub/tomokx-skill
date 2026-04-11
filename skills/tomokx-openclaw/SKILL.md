@@ -1,11 +1,13 @@
 ---
 name: tomokx-openclaw
-description: |
-  Automated trading system for ETH-USDT-SWAP perpetual contracts on OKX.
-  Triggers on: "start trading", "run trading check", "check ETH positions",
-  "place OKX orders", "show trading status", "generate trading report".
-  Use for: executing grid trading strategy, managing open orders,
-  monitoring positions, risk control, daily reporting.
+description: "Automated trading system for ETH-USDT-SWAP perpetual contracts on OKX. Triggers on: start trading, run trading check, check ETH positions, place OKX orders, show trading status, generate trading report. Use for: executing grid trading strategy, managing open orders, monitoring positions, risk control, daily reporting."
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "📈"
+      }
+  }
 ---
 
 ## Overview
