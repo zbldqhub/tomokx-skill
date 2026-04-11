@@ -24,7 +24,13 @@ NODES = [
     ("th1.lovehonor.top", 9301),
 ]
 
-PASSWORD = "a2f10cf0-3cbf-49a8-991d-b6188d453e54"
+# Get password from environment variable
+PASSWORD = os.environ.get("HYSTERIA_PASSWORD", "")
+if not PASSWORD:
+    print("[hysteria-switcher] ERROR: HYSTERIA_PASSWORD environment variable not set")
+    print("[hysteria-switcher] Please set it in ~/.openclaw/workspace/.env.trading")
+    exit(1)
+
 CONFIG_PATH = "/etc/hysteria/config.yaml"
 SOCKS5_PORT = 1080
 TEST_URL = "https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP"

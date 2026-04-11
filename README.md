@@ -37,23 +37,41 @@ mkdir -p ~/.openclaw/workspace
 cp scripts/* ~/.openclaw/workspace/scripts/
 ```
 
-### 3. 配置 API 密钥
+### 3. 配置环境变量
 
 创建 `~/.openclaw/workspace/.env.trading`:
 
 ```bash
-# OKX API 凭证
+# ============================================
+# OKX API 凭证（必需）
+# ============================================
 export OKX_API_KEY="your-api-key"
 export OKX_SECRET_KEY="your-secret-key"
 export OKX_PASSPHRASE="your-passphrase"
 
-# 交易参数（可选）
-export MAX_ORDERS=20
-export MAX_TOTAL=20
-export ORDER_SIZE=0.1
-export LEVERAGE=10
-export DAILY_LOSS_LIMIT=40
+# ============================================
+# 代理密码（必需）
+# ============================================
+# Hysteria2 代理密码（用于 hysteria-switcher.py）
+export HYSTERIA_PASSWORD="your-hysteria-password"
+
+# Shadowsocks 代理密码（用于 proxy-switcher.py）
+export SS_PASSWORD="your-shadowsocks-password"
+
+# ============================================
+# 交易参数（可选，使用默认值可省略）
+# ============================================
+export MAX_ORDERS=20        # 最大挂单数
+export MAX_TOTAL=20         # 最大总仓位（挂单+持仓）
+export ORDER_SIZE=0.1       # 每张订单合约数
+export LEVERAGE=10          # 杠杆倍数
+export DAILY_LOSS_LIMIT=40  # 日亏损限制（USDT）
 ```
+
+**⚠️ 安全提示：**
+- 此文件包含敏感信息，**永远不要提交到 Git**
+- 已自动添加到 `.gitignore`，不会被跟踪
+- 建议设置文件权限：`chmod 600 ~/.openclaw/workspace/.env.trading`
 
 ### 4. 验证环境
 
