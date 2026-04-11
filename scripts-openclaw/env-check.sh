@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# env-check.sh - 快速验证 ETH Trader 交易环境
+# env-check.sh - 快速验证 ETH Trader 交易环境 (Linux/macOS)
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ echo "======================================"
 
 # 1. 检查必要命令
 MISSING=0
-for cmd in okx curl python3 node; do
+for cmd in okx curl python3 bc; do
     if command -v "$cmd" >&/dev/null; then
         echo -e "${GREEN}✓${NC} $cmd 已安装"
     else
@@ -48,22 +48,28 @@ else
     exit 1
 fi
 
-# 4. 自动 patch okx CLI
+# 4. API 连通性检查
 echo ""
-echo "正在检查 OKX CLI ProxyAgent patch..."
-if node "${WORKSPACE}/scripts/patch-okx-cli.js"; then
-    echo -e "${GREEN}✓${NC} OKX CLI patch 检查通过"
-else
-    echo -e "${RED}✗${NC} OKX CLI patch 失败"
-    exit 1
-fi
+echo "正在测试 OKX API 连接..."
+for i in 1 2 3; do
+    if curl -s --max-time 15 "https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP" 2>/dev/null | grep -q '"last":"'; then
+        LAST=$(curl -s --max-time 15 "https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP" 2>/dev/null | grep -o '"last":"[0-9.]*"' | head -1 | cut -d'"' -f4)
+        echo -e "${GREEN}✓${NC} OKX API 连接正常，ETH-USDT-SWAP 最新价格: $LAST"
+        break
+    fi
+    if [ "$i" -eq 3 ]; then
+        echo -e "${RED}✗${NC} OKX API 连接失败"
+        exit 1
+    fi
+    sleep 2
+done
 
 # 5. OKX CLI 认证检查
 echo ""
 echo "正在测试 OKX CLI 认证..."
 if okx swap orders >&1 2>&1 | grep -q "Error: Private endpoint requires API credentials"; then
-    echo -e "${RED}✗${NC} OKX CLI 认证失败: 环境变量可能未正确传入 OKX CLI"
-    echo -e "${YELLOW}!${NC} 提示: 使用 'source .env.trading && okx ...' 格式"
+    echo -e "${RED}✗${NC} OKX CLI 认证失败"
+    echo -e "${YELLOW}!${NC} 提示: 确保 okx config 中配置了正确的 API 密钥"
     exit 1
 else
     echo -e "${GREEN}✓${NC} OKX CLI 认证正常"

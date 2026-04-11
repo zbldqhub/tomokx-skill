@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ETH Market Data Aggregator for tomokx skill.
+ETH Market Data Aggregator for tomokx-openclaw skill.
 Fetches market data, orders, positions, and balance.
 Outputs a single JSON for AI decision making.
 """
@@ -32,17 +32,15 @@ def load_env():
     return env
 
 ENV = load_env()
-PROXY_URL = ENV.get("HTTP_PROXY") or ENV.get("HTTPS_PROXY") or "http://127.0.0.1:17890"
 
 def run_cmd(cmd_list, timeout=30):
-    """Run a command with env loaded."""
+    """Run a command with env loaded via bash."""
+    env_bash = f"source {ENV_FILE} && " + " ".join(cmd_list)
     try:
         result = subprocess.run(
-            " ".join(cmd_list),
+            ["bash", "-c", env_bash],
             capture_output=True,
             timeout=timeout,
-            env=ENV,
-            shell=True,
         )
         stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
         stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ""
@@ -58,7 +56,6 @@ def run_cmd_with_retry(cmd_list, retries=2, delay=2, timeout=30):
             parsed = parse_table_output(stdout)
             if parsed:
                 return stdout, stderr, rc, parsed
-            # Empty parsed but rc=0: might be transient empty response
             if attempt < retries:
                 time.sleep(delay)
                 continue
@@ -149,9 +146,8 @@ def get_ticker_via_curl():
     url = "https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP"
     try:
         result = subprocess.run(
-            ["curl", "-x", PROXY_URL, "-s", "--max-time", "15", url],
+            ["curl", "-s", "--max-time", "15", url],
             capture_output=True, timeout=20,
-            env=ENV,
         )
         stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
         stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ""
@@ -188,9 +184,8 @@ def get_candles():
     url = "https://www.okx.com/api/v5/market/history-candles?instId=ETH-USDT-SWAP&bar=1H&limit=10"
     try:
         result = subprocess.run(
-            ["curl", "-x", "http://127.0.0.1:17890", "-s", "--max-time", "15", url],
+            ["curl", "-s", "--max-time", "15", url],
             capture_output=True, timeout=20,
-            env=ENV,
         )
         stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
         stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ""

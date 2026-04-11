@@ -1,5 +1,5 @@
 ---
-name: tomokx
+name: tomokx-openclaw
 description: |
   Automated trading system for ETH-USDT-SWAP perpetual contracts on OKX.
   Triggers on: "start trading", "run trading check", "check ETH positions",
@@ -80,53 +80,14 @@ This skill activates when you say:
 
 ### Step 0: Environment Setup
 
-**Workspace Path Convention:**
-All paths in this skill use `$WORKSPACE` which resolves to `C:\Users\ldq\.openclaw\workspace` on this machine. When running commands, replace `$WORKSPACE` with the actual path or set it as an environment variable.
-
 Before any OKX CLI operation, always run:
-```powershell
-$env:OKX_API_KEY=(Get-Content "$WORKSPACE\.env.trading" | Select-String "OKX_API_KEY").ToString().Split('"')[1]
-$env:OKX_SECRET_KEY=(Get-Content "$WORKSPACE\.env.trading" | Select-String "OKX_SECRET_KEY").ToString().Split('"')[1]
-$env:OKX_PASSPHRASE=(Get-Content "$WORKSPACE\.env.trading" | Select-String "OKX_PASSPHRASE").ToString().Split('"')[1]
-```
-Or simply source the env file in a compatible shell:
 ```bash
-source $WORKSPACE/.env.trading
+source ~/.openclaw/workspace/.env.trading
 ```
-
-<!-- **Auto-switch proxy node if needed:**
-```bash
-python3 ~/.openclaw/workspace/scripts/hysteria-switcher.py
-```
-If the script exits with non-zero code, STOP execution and notify the user: "所有代理节点均不可用，交易检查中止。"
-
-Verify proxy and API connectivity. Execute this test command; if it does not return data containing "last", wait 2 seconds and retry up to 3 times:
-```bash
-source $WORKSPACE/.env.trading && curl -x $HTTP_PROXY -s --max-time 15 https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP 2>/dev/null | grep last
-```
-
-If all 3 retries fail, STOP execution and notify the user.
-
-**Important:** proxychains4 spawns a new process and does NOT automatically inherit unsourced env vars. Always source .env.trading first.
-
-**Proxy Node Pool (managed by hysteria-switcher.py):**
-- hk1.lovehonor.top:9301
-- hk2.lovehonor.top:9301
-- jp1.lovehonor.top:9301
-- jp2.lovehonor.top:9301
-- sg1.lovehonor.top:9301
-- sg2.lovehonor.top:9301
-- kr1.lovehonor.top:9301
-- kr2.lovehonor.top:9301
-- us1.lovehonor.top:9301
-- in1.lovehonor.top:9301
-- gb1.lovehonor.top:9301
-- th1.lovehonor.top:9301
--->
 
 **Verify API connectivity.** Execute this test command; if it does not return data containing "last", wait 2 seconds and retry up to 3 times:
 ```bash
-source $WORKSPACE/.env.trading && curl -x $HTTP_PROXY -s --max-time 15 https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP 2>/dev/null | grep last
+source ~/.openclaw/workspace/.env.trading && curl -s --max-time 15 https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP 2>/dev/null | grep last
 ```
 
 If all 3 retries fail, STOP execution and notify the user.
@@ -135,22 +96,22 @@ If all 3 retries fail, STOP execution and notify the user.
 
 **1.1 Check Stop Protection:**
 
-Read `$WORKSPACE/.trading_stopped`. 
+Read `~/.openclaw/workspace/.trading_stopped`. 
 - If the file contains a date older than today, **reset it to `0`** and continue.
 - If it exists and contains a number ≥ 3:
   - Notify the user: 🛑 交易已暂停 / 连续止损次数: X / 已达到最大允许次数，交易自动暂停
   - STOP execution
 
-To reset: `echo 0 > $WORKSPACE/.trading_stopped`
+To reset: `echo 0 > ~/.openclaw/workspace/.trading_stopped`
 
 **1.2 Check Daily Loss Limit:**
 
 Calculate today's realized P&L for **ETH-USDT-SWAP only** from positions closed today. Run:
 ```bash
-source $WORKSPACE/.env.trading
-okx account bills --instType SWAP --begin (Get-Date -Format yyyy-MM-dd)T00:00:00.000Z
+source ~/.openclaw/workspace/.env.trading
+okx account bills --instType SWAP --type 2 --begin $(date -u +%Y-%m-%dT00:00:00.000Z)
 ```
-Filter: `instId = ETH-USDT-SWAP` AND `pnl < 0` (realized loss). Sum only those negative `pnl` values. If daily loss > 40 USDT:
+Filter: `instId = ETH-USDT-SWAP` AND `balChg < 0` (realized loss). Sum only those negative `balChg` values. If daily loss > 40 USDT:
 - Notify the user: ⚠️ 日亏损限制触发 / 今日ETH亏损: X USDT / 已停止交易
 - STOP execution
 - Log: `[timestamp] Daily ETH loss limit reached: X USDT, trading stopped`
@@ -159,7 +120,7 @@ Filter: `instId = ETH-USDT-SWAP` AND `pnl < 0` (realized loss). Sum only those n
 
 Run the data aggregator script to collect all market data, orders, positions, and balance in one shot:
 ```bash
-python $WORKSPACE/scripts/eth_market_analyzer.py
+python3 ~/.openclaw/workspace/scripts/eth_market_analyzer.py
 ```
 
 Parse the JSON output. If the script fails (non-zero exit or no JSON), fall back to the individual CLI commands in Steps 2–4.
@@ -178,7 +139,7 @@ Parse the JSON output. If the script fails (non-zero exit or no JSON), fall back
 
 Use the OKX CLI to fetch ETH-USDT-SWAP ticker data. **Prefer using the JSON output from Step 1.5.** If Step 1.5 failed, run:
 ```bash
-source $WORKSPACE/.env.trading
+source ~/.openclaw/workspace/.env.trading
 okx market ticker ETH-USDT-SWAP
 ```
 
@@ -194,7 +155,7 @@ Parse the response and determine trend. Use both **1h stats** (`hourly_stats`) a
 
 Count only live ETH-USDT-SWAP **opening-direction** orders with size 0.1. **Prefer using `orders` from Step 1.5.** If unavailable, run:
 ```bash
-source $WORKSPACE/.env.trading
+source ~/.openclaw/workspace/.env.trading
 okx swap orders
 ```
 **Strict counting rule:** Only include orders where:
@@ -210,7 +171,7 @@ okx swap orders
 
 Count only 10x isolated ETH-USDT-SWAP positions. **Prefer using `positions` from Step 1.5.** If unavailable, run:
 ```bash
-source $WORKSPACE/.env.trading
+source ~/.openclaw/workspace/.env.trading
 okx swap positions
 ```
 Filter: instId = ETH-USDT-SWAP AND lever = 10.
@@ -230,7 +191,7 @@ Filter: instId = ETH-USDT-SWAP AND lever = 10.
 If Step 1.5 succeeded, use `market.last` as current price. Then for each live 0.1 order:
 If |order_price - current_price| > 100 USDT, cancel it:
 ```bash
-source $WORKSPACE/.env.trading
+source ~/.openclaw/workspace/.env.trading
 okx swap cancel --instId ETH-USDT-SWAP --ordId <order_id>
 ```
 
@@ -290,7 +251,7 @@ okx swap cancel --instId ETH-USDT-SWAP --ordId <order_id>
    - Round TP and SL to 2 decimals.
 10. Place order with TP/SL attached:
 ```bash
-source $WORKSPACE/.env.trading
+source ~/.openclaw/workspace/.env.trading
 okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordType limit --sz 0.1 --px=<px> --posSide <short|long> --tpTriggerPx=<tp> --tpOrdPx=-1 --slTriggerPx=<sl> --slOrdPx=-1
 ```
 
@@ -302,8 +263,8 @@ After placing orders, check whether any previously placed ETH-USDT-SWAP orders w
 
 **Detection method:**
 ```bash
-source C:\Users\ldq\.openclaw\workspace\.env.trading
-okx account bills --instType SWAP --type 2 --begin (Get-Date -Format yyyy-MM-dd)T00:00:00.000Z
+source ~/.openclaw/workspace/.env.trading
+okx account bills --instType SWAP --type 2 --begin $(date -u +%Y-%m-%dT00:00:00.000Z)
 ```
 Filter for:
 - `instId = ETH-USDT-SWAP`
@@ -311,9 +272,9 @@ Filter for:
 - `ts` is newer than the timestamp of the last trading check
 
 For each qualifying stop-loss event:
-1. Read `$WORKSPACE/.trading_stopped`
+1. Read `~/.openclaw/workspace/.trading_stopped`
 2. Increment the number by 1
-3. Write it back to `$WORKSPACE/.trading_stopped`
+3. Write it back to `~/.openclaw/workspace/.trading_stopped`
 4. Log: `[timestamp] Stop-loss triggered: ordId=<id>, pnl=<pnl>. Consecutive count: X`
 
 If the file contains a date older than today, reset it to `0` before counting.
@@ -393,11 +354,11 @@ If daily loss limit reached:
 
 Query and summarize:
 ```bash
-source $WORKSPACE/.env.trading
+source ~/.openclaw/workspace/.env.trading
 okx swap positions
 okx swap orders
 okx account balance
-Get-Content -Tail 50 $WORKSPACE/auto_trade.log
+tail -n 50 ~/.openclaw/workspace/auto_trade.log
 ```
 
 Generate summary report with P&L analysis.
@@ -484,7 +445,7 @@ Execute Steps 0, 2, 3, 4 and report current state without placing orders.
 Reset the consecutive stop-loss counter to 0 and resume trading.
 
 ```bash
-echo 0 > $WORKSPACE/.trading_stopped
+echo 0 > ~/.openclaw/workspace/.trading_stopped
 ```
 
 **Usage:** "重置止损计数" or "reset stop counter"
@@ -518,15 +479,10 @@ Trading involves significant risk of loss. This system uses leveraged trading wh
 ### 1. eth-trader-run.sh
 Wrapper script for environment validation only. Does NOT execute trading decisions.
 
-### 2. env-check.sh / env-check.ps1
-快速验证 ETH Trader 交易环境。
-- **Linux/macOS/Git Bash**: `$WORKSPACE/scripts/env-check.sh`
-- **Windows PowerShell**: `$WORKSPACE/scripts/env-check.ps1`
-
-### 3. patch-okx-cli.js
-Auto-patches the OKX Trade CLI (`okx-trade-cli`) to allow TLS connections through local HTTP proxies (e.g., Clash). Run automatically by `env-check.sh` / `env-check.ps1`. If you upgrade the OKX CLI via `npm install -g @okx_ai/okx-trade-cli`, re-run:
+### 2. env-check.sh
+快速验证 ETH Trader 交易环境（Linux/macOS）。
 ```bash
-node $WORKSPACE/scripts/patch-okx-cli.js
+bash ~/.openclaw/workspace/scripts/env-check.sh
 ```
 
 ## Configuration
@@ -539,10 +495,6 @@ export OKX_API_KEY="your-api-key"
 export OKX_SECRET_KEY="your-secret-key"
 export OKX_PASSPHRASE="your-passphrase"
 
-# Network Proxy (used by curl and eth_market_analyzer.py)
-export HTTP_PROXY="http://127.0.0.1:17890"
-export HTTPS_PROXY="http://127.0.0.1:17890"
-
 # Trading Parameters
 export MAX_ORDERS=20
 export MAX_TOTAL=20
@@ -554,15 +506,12 @@ export DAILY_LOSS_LIMIT=40
 ### File Structure
 
 ```
-$WORKSPACE/
+~/.openclaw/workspace/
 ├── .env.trading          # API keys and config
 ├── .trading_stopped      # Stop counter (0-3+)
 ├── auto_trade.log        # Trading activity log
-├── scripts/              # Trading scripts
-│   ├── eth_market_analyzer.py
-│   ├── env-check.sh
-│   ├── eth-trader-run.sh
-│   └── patch-okx-cli.js
-└── skills/tomokx/
-    └── SKILL.md          # This file
+└── scripts/              # Trading scripts
+    ├── eth_market_analyzer.py
+    ├── env-check.sh
+    └── eth-trader-run.sh
 ```
