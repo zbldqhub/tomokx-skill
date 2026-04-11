@@ -11,6 +11,7 @@ import time
 import os
 
 ENV_FILE = os.path.expanduser("~/.openclaw/workspace/.env.trading")
+PROXY_URL = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or "http://127.0.0.1:17890"
 
 def load_env():
     """Load KEY=VAL pairs from bash-style .env file into os.environ."""
@@ -32,7 +33,6 @@ def load_env():
     return env
 
 ENV = load_env()
-PROXY_URL = ENV.get("HTTP_PROXY") or ENV.get("HTTPS_PROXY") or "http://127.0.0.1:17890"
 
 def run_cmd(cmd_list, timeout=30):
     """Run a command with env loaded."""
@@ -75,48 +75,51 @@ def parse_key_value_output(stdout):
         line = line.strip()
         if not line or line.startswith("[") or line.startswith("Update") or line.startswith("Version:"):
             continue
-        if "   " in line or "\t" in line or ("  " in line and len(line.split("  ")) == 2):
-            parts = [p.strip() for p in line.replace("\t", "  ").split("  ") if p.strip()]
-            if len(parts) >= 2:
-                key = parts[0]
-                val = " ".join(parts[1:])
-                result[key] = val
+        # okx CLI uses exactly two spaces as delimiter in key-value mode
+        parts = [p.strip() for p in line.split("  ") if p.strip()]
+        if len(parts) >= 2:
+            key = parts[0]
+            val = " ".join(parts[1:])
+            result[key] = val
     return result
 
 def parse_table_output(stdout):
     """Parse okx CLI table-like output into list of dicts."""
-    lines = [l for l in stdout.splitlines() if l.strip() and not l.startswith("[") and not l.startswith("Update")]
+    lines = [
+        l for l in stdout.splitlines()
+        if l.strip()
+        and not l.startswith("[")
+        and not l.startswith("Update")
+        and not l.strip().startswith("Environment:")
+    ]
     if not lines:
         return []
+
+    # Find header row: it should contain multiple known column names
     header_idx = -1
+    known_cols = {"ordId", "instId", "side", "posSide", "type", "price", "size", "state", "ccy", "availEq", "eq", "lever", "avgPx", "upl", "uplRatio"}
     for i, line in enumerate(lines):
-        if line.strip().startswith("ordId") or line.strip().startswith("instId") or line.strip().startswith("side") or line.strip().startswith("ccy") or line.strip().startswith("ETH-"):
-            if i > 0:
-                header_idx = i - 1
-            else:
-                header_idx = i
+        tokens = set(line.strip().split())
+        if len(tokens.intersection(known_cols)) >= 2:
+            header_idx = i
             break
-    if header_idx == -1:
-        for i, line in enumerate(lines):
-            if any(k in line for k in ["instId", "side", "price", "size", "state", "ordId", "ccy", "availEq", "eq"]):
-                header_idx = i
-                break
+
     if header_idx == -1 or header_idx >= len(lines):
         return []
-    
+
     headers = [h.strip() for h in lines[header_idx].split() if h.strip()]
     data = []
-    sep_line = None
+
     for i in range(header_idx + 1, len(lines)):
         line = lines[i]
-        if "-----" in line:
-            sep_line = i
+        # Skip separator lines and version lines
+        if "-----" in line or line.strip().startswith("Version:"):
             continue
-        if sep_line and i == sep_line:
+        # Skip lines that look like headers or empty
+        if not line.strip():
             continue
-        if not line.strip() or line.strip().startswith("Version:"):
-            continue
-        if not headers:
+        tokens = set(line.strip().split())
+        if len(tokens.intersection(known_cols)) >= 2:
             continue
         parts = line.split()
         if len(parts) >= len(headers):
@@ -126,6 +129,55 @@ def parse_table_output(stdout):
                     row[h] = parts[idx]
             data.append(row)
     return data
+
+def parse_cli_json(stdout):
+    """Parse OKX CLI --json output (v1.3.0 raw list/object or <=v1.2.7 wrapped)."""
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            if "data" in data:
+                return data.get("data", [])
+            return [data]
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: extract first JSON array from mixed text
+    start = stdout.find("[")
+    if start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(stdout)):
+            c = stdout[i]
+            if escape:
+                escape = False
+                continue
+            if c == '\\':
+                escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if c == '[':
+                    depth += 1
+                elif c == ']':
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(stdout[start:i+1])
+                        except json.JSONDecodeError:
+                            break
+
+    # Final fallback: wrapped object extraction
+    obj = extract_json(stdout)
+    if obj and isinstance(obj, dict) and "data" in obj:
+        return obj.get("data", [])
+    if obj and isinstance(obj, dict):
+        return [obj]
+    return []
 
 def extract_json(stdout):
     """Extract the outermost JSON object from mixed stdout text."""
@@ -151,7 +203,6 @@ def get_ticker_via_curl():
         result = subprocess.run(
             ["curl", "-x", PROXY_URL, "-s", "--max-time", "15", url],
             capture_output=True, timeout=20,
-            env=ENV,
         )
         stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
         stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ""
@@ -159,27 +210,57 @@ def get_ticker_via_curl():
             return {"error": stderr or "curl ticker failed", "rc": result.returncode}
         obj = json.loads(stdout)
         if obj.get("code") == "0" and obj.get("data"):
-            return obj["data"][0]
+            d = obj["data"][0]
+            return {
+                "last": d.get("last", ""),
+                "open24h": d.get("open24h", ""),
+                "high24h": d.get("high24h", ""),
+                "low24h": d.get("low24h", ""),
+                "bidPx": d.get("bidPx", ""),
+                "askPx": d.get("askPx", ""),
+            }
         return {"error": "ticker API error", "code": obj.get("code"), "msg": obj.get("msg")}
     except Exception as e:
         return {"error": str(e)}
 
 def get_ticker():
     for attempt in range(2):
-        stdout, stderr, rc = run_cmd(["okx", "market", "ticker", "ETH-USDT-SWAP"])
+        stdout, stderr, rc = run_cmd(["okx", "market", "ticker", "ETH-USDT-SWAP", "--json"])
         if rc == 0:
+            try:
+                data = json.loads(stdout)
+                if isinstance(data, list) and len(data) > 0:
+                    d = data[0]
+                    return {
+                        "last": d.get("last", ""),
+                        "open24h": d.get("open24h", ""),
+                        "high24h": d.get("high24h", ""),
+                        "low24h": d.get("low24h", ""),
+                        "bidPx": d.get("bidPx", ""),
+                        "askPx": d.get("askPx", ""),
+                    }
+            except json.JSONDecodeError:
+                pass
             obj = extract_json(stdout)
             if obj and obj.get("code") == "0" and obj.get("data"):
-                return obj["data"][0]
+                d = obj["data"][0]
+                return {
+                    "last": d.get("last", ""),
+                    "open24h": d.get("open24h", ""),
+                    "high24h": d.get("high24h", ""),
+                    "low24h": d.get("low24h", ""),
+                    "bidPx": d.get("bidPx", ""),
+                    "askPx": d.get("askPx", ""),
+                }
             kv = parse_key_value_output(stdout)
             if kv and "last" in kv:
                 return {
                     "last": kv.get("last", "").replace(",", ""),
-                    "open24h": kv.get("24h open", "").replace(",", ""),
+                    "open24h": kv.get("open24h", "").replace(",", ""),
                     "high24h": kv.get("24h high", "").replace(",", ""),
                     "low24h": kv.get("24h low", "").replace(",", ""),
-                    "bidPx": "",
-                    "askPx": "",
+                    "bidPx": kv.get("bidPx", "").replace(",", ""),
+                    "askPx": kv.get("askPx", "").replace(",", ""),
                 }
         time.sleep(3)
     return get_ticker_via_curl()
@@ -188,9 +269,8 @@ def get_candles():
     url = "https://www.okx.com/api/v5/market/history-candles?instId=ETH-USDT-SWAP&bar=1H&limit=10"
     try:
         result = subprocess.run(
-            ["curl", "-x", "http://127.0.0.1:17890", "-s", "--max-time", "15", url],
+            ["curl", "-x", PROXY_URL, "-s", "--max-time", "15", url],
             capture_output=True, timeout=20,
-            env=ENV,
         )
         stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
         stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ""
@@ -204,18 +284,40 @@ def get_candles():
         return {"error": str(e)}
 
 def get_orders():
+    for attempt in range(3):
+        stdout, stderr, rc = run_cmd(["okx", "swap", "orders", "--json"])
+        if rc == 0:
+            parsed = parse_cli_json(stdout)
+            if parsed:
+                return parsed
+        time.sleep(2)
+    # Fallback to table parsing for older CLI or edge cases
     stdout, stderr, rc, parsed = run_cmd_with_retry(["okx", "swap", "orders"], retries=2, delay=3)
     if rc != 0:
         return {"error": stderr or "orders failed", "rc": rc}
     return parsed if parsed else {"error": "orders empty after retry", "raw_preview": stdout[:500]}
 
 def get_positions():
+    for attempt in range(3):
+        stdout, stderr, rc = run_cmd(["okx", "swap", "positions", "--json"])
+        if rc == 0:
+            parsed = parse_cli_json(stdout)
+            if parsed:
+                return parsed
+        time.sleep(2)
     stdout, stderr, rc, parsed = run_cmd_with_retry(["okx", "swap", "positions"], retries=2, delay=3)
     if rc != 0:
         return {"error": stderr or "positions failed", "rc": rc}
     return parsed if parsed else {"error": "positions empty after retry", "raw_preview": stdout[:500]}
 
 def get_balance():
+    for attempt in range(3):
+        stdout, stderr, rc = run_cmd(["okx", "account", "balance", "--json"])
+        if rc == 0:
+            parsed = parse_cli_json(stdout)
+            if parsed:
+                return parsed
+        time.sleep(2)
     stdout, stderr, rc, parsed = run_cmd_with_retry(["okx", "account", "balance"], retries=2, delay=3)
     if rc != 0:
         return {"error": stderr or "balance failed", "rc": rc}

@@ -146,11 +146,13 @@ To reset: `echo 0 > $WORKSPACE/.trading_stopped`
 **1.2 Check Daily Loss Limit:**
 
 Calculate today's realized P&L for **ETH-USDT-SWAP only** from positions closed today. Run:
-```bash
-source $WORKSPACE/.env.trading
-okx account bills --instType SWAP --begin (Get-Date -Format yyyy-MM-dd)T00:00:00.000Z
+```powershell
+python $WORKSPACE/scripts/get_bills.py --today
 ```
-Filter: `instId = ETH-USDT-SWAP` AND `pnl < 0` (realized loss). Sum only those negative `pnl` values. If daily loss > 40 USDT:
+Parse the JSON output. Filter:
+- `instId = ETH-USDT-SWAP`
+- `subType` is one of **4, 6, 110, 111, 112** (reduce/close/TP/SL/liquidation)
+Sum **all** of those `pnl` values (both positive and negative) to get the **net realized P&L**. If the net total is **less than -40 USDT**:
 - Notify the user: ⚠️ 日亏损限制触发 / 今日ETH亏损: X USDT / 已停止交易
 - STOP execution
 - Log: `[timestamp] Daily ETH loss limit reached: X USDT, trading stopped`
@@ -274,17 +276,37 @@ okx swap cancel --instId ETH-USDT-SWAP --ordId <order_id>
    - **First**, ensure the target distribution from Step 7 is met (e.g., Bullish needs at least 2 long for every 1 short). 
    - **Only if** the target ratio is already satisfied, prefer the side with fewer total positions.
    - Respect the per-side maximum of 4 live orders.
-5. **Per-cycle order sequence rule:** When placing multiple new orders in a single trading cycle, treat them as a sequence where each subsequent order is calculated from the **previous newly planned order** (or the nearest existing live order), **not** from the current market price.
-   - For the 1st new short (`sell` + `short` opening): price = min_short_px + gap (or current_price * 1.002 if no short orders)
-   - For the 2nd new short: price = 1st_new_short_price + gap
-   - For the 3rd new short: price = 2nd_new_short_price + gap
-   - Same logic for longs (`buy` + `long` opening) in the opposite direction.
-   - **All new orders must be opening-direction only.** Do NOT place closing orders (`sell+long` or `buy+short`) as part of grid replenishment. Position reduction is handled exclusively by per-order TP/SL.
+5. **Grid order placement rule:** All new orders must be **opening-direction only** and placed **outside** the current live grid (away from the market price). Do NOT place closing orders (`sell+long` or `buy+short`). Position reduction is handled exclusively by per-order TP/SL.
+
+   **Two scenarios:**
+
+   **A. Replenishing a partially filled side (1 or 2 missing orders):**
+   - Calculate the price from the **farthest existing live order** on that side, extending outward by exactly one gap:
+     - New short = **max_short_px + gap**
+     - New long = **min_long_px - gap**
+   - **NEVER** replenish on the inside (between the market price and the nearest live order). An inside order would be immediately filled or worse-than-market, defeating the purpose of a limit grid.
+
+   **B. Building a side from scratch (0 live orders on that side):**
+   - Short #1 = current_price × 1.002
+   - Short #2 = Short #1 + gap
+   - Short #3 = Short #2 + gap
+   - Short #4 = Short #3 + gap
+   - Long #1 = current_price × 0.998
+   - Long #2 = Long #1 - gap
+   - Long #3 = Long #2 - gap
+   - Long #4 = Long #3 - gap
 7. Round price to 2 decimal places before placing.
 8. **Critical intra-cycle conflict check:** Before finalizing each newly planned order, compare its price against **all other newly planned orders in this same cycle** (as well as existing live orders on the same side). If any two planned orders are **< gap** apart, move the conflicting order outward by **exactly one additional gap** and re-check. Repeat until all intra-cycle and live-order conflicts are resolved. **Never place two orders within the same cycle at prices that differ by less than the gap.**
 9. Calculate TP/SL:
-   - **TP** = entry_price ± a dynamic offset in the range **10–50 USDT**, chosen by the Agent based on current market conditions (volatility, trend strength, and recent price action).
-   - **SL** = entry_price ∓ a dynamic offset in the range **80–120 USDT**, chosen by the Agent based on current market conditions.
+   - **TP** = entry_price ± a dynamic offset chosen by the Agent based on current `volatility_1h`. Use this mapping:
+     | `volatility_1h` | TP Offset Range | Recommendation |
+     |-----------------|-----------------|----------------|
+     | < 5             | **8–15 USDT**   | Low volatility → tight TP for frequent fills |
+     | 5–10            | **15–25 USDT**  | Moderate low vol → balanced |
+     | 10–15           | **20–35 USDT**  | Normal vol → default range |
+     | 15–25           | **30–45 USDT**  | Elevated vol → wider TP |
+     | > 25            | **40–50 USDT**  | High vol → maximum width |
+   - **SL** = entry_price ∓ a dynamic offset in the range **80–120 USDT**, chosen by the Agent based on current market conditions. In low volatility (`volatility_1h` < 8), lean toward the lower end (80–90); in high volatility, lean toward the upper end (110–120).
      - Long: TP = entry + offset_tp, SL = entry - offset_sl
      - Short: TP = entry - offset_tp, SL = entry + offset_sl
    - Round TP and SL to 2 decimals.
@@ -301,13 +323,13 @@ After each placement, update counters and re-check limits before placing the nex
 After placing orders, check whether any previously placed ETH-USDT-SWAP orders with attached SL were triggered and closed at a loss since the last trading cycle.
 
 **Detection method:**
-```bash
-source C:\Users\ldq\.openclaw\workspace\.env.trading
-okx account bills --instType SWAP --type 2 --begin (Get-Date -Format yyyy-MM-dd)T00:00:00.000Z
+```powershell
+python $WORKSPACE/scripts/get_bills.py --today
 ```
 Filter for:
 - `instId = ETH-USDT-SWAP`
-- `subType = 110` (stop-loss) OR (`pnl < 0` AND the `ordId` matches an order known to have an SL)
+- `subType` is one of **4, 6, 110, 111, 112** (reduce/close/TP/SL/liquidation)
+- `pnl < 0`
 - `ts` is newer than the timestamp of the last trading check
 
 For each qualifying stop-loss event:
@@ -326,7 +348,7 @@ If the file contains a date older than today, reset it to `0` before counting.
 
 ### Step 9: Calculate TP/SL
 
-See Step 8 placement steps for exact formulas. TP uses a dynamic 10–50 USDT offset and SL uses a dynamic 80–120 USDT offset based on market conditions. Round all prices to 2 decimals.
+See Step 8 placement steps for exact formulas. TP uses a volatility-mapped dynamic offset (8–50 USDT) and SL uses a dynamic 80–120 USDT offset based on market conditions. Round all prices to 2 decimals.
 
 ### Step 10: Log and Notify
 

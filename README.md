@@ -25,7 +25,9 @@
 | **Windows 手动版** | `skills/tomokx/` | 本地 Windows 开发/测试 | 手动触发 |
 | **Linux/openclaw 版** | `skills/tomokx-openclaw/` | 服务器/Linux 定时运行 | openclaw cron / 每 30 分钟 |
 
-> **注意**: 代理自动切换逻辑（`hysteria-switcher.py`、`proxy-switcher.py`）已被注释掉，当前版本依赖系统级网络连通性。
+> **注意**: 代理自动切换逻辑（`hysteria-switcher.py`、`proxy-switcher.py`）已被移除，当前版本依赖系统级网络连通性。
+>
+> **CLI 1.3.0 适配说明**: `okx account bills` 在 1.3.0 中不再支持 `--type` / `--begin` 等过滤参数，因此使用自定义 `get_bills.py` 直接调用 REST API 获取账单数据。`eth_market_analyzer.py` 也已适配 CLI 1.3.0 的 `--json` 输出格式（raw data）。
 
 ---
 
@@ -35,14 +37,14 @@
 
 **Windows 手动版:**
 - Windows 10/11
-- `okx` CLI 工具 (v1.2.6+)
+- `okx` CLI 工具 (v1.3.0+)
 - `python` (3.12+)
 - `curl`
 - `node`（用于自动 patch OKX CLI 的 ProxyAgent TLS）
 
 **Linux/openclaw 版:**
 - Linux / macOS / WSL
-- `okx` CLI 工具 (v1.2.6+)
+- `okx` CLI 工具 (v1.3.0+)
 - `python3`
 - `curl`
 - `bash`
@@ -155,8 +157,8 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 1. **纯开仓网格**：只下 `buy+long`（开多）和 `sell+short`（开空），**禁止**主动下平仓单（`sell+long` / `buy+short`）。平仓由每单自带的 TP/SL 自动处理。
 2. **单侧上限**：long 侧和 short 侧各自最多 **4 个 live 订单**。
 3. **序列递进**：同一周期内多个新单必须像梯子一样逐级排列，禁止同一周期内出现价格差 < gap 的订单。
-4. **止损计数器**：Step 8.5 会检测 `subType=110` 的账单并递增 `.trading_stopped`，≥3 时自动暂停交易。
-5. **日亏损**：只统计 `ETH-USDT-SWAP` 的 realized loss，>40 USDT 时停止。
+4. **止损计数器**：Step 8.5 会检测平仓/减仓/TP/SL/强平（`subType ∈ {4,6,110,111,112}`）且 `pnl < 0` 的账单，递增 `.trading_stopped`，≥3 时自动暂停交易。
+5. **日亏损**：只统计 `ETH-USDT-SWAP` 平仓类记录（`subType ∈ {4,6,110,111,112}`）的 **pnl 净值**（盈利可冲抵亏损），净值 < -40 USDT 时停止。
 
 ### 风险控制
 
@@ -231,6 +233,24 @@ python C:\Users\<username>\.openclaw\workspace\scripts\eth_market_analyzer.py
 python3 ~/.openclaw/workspace/scripts/eth_market_analyzer.py
 ```
 
+#### 账单查询（日亏损 / 止损检查）
+```bash
+# Windows
+python C:\Users\<username>\.openclaw\workspace\scripts\get_bills.py --today
+
+# Linux
+python3 ~/.openclaw/workspace/scripts/get_bills.py --today
+```
+
+#### 交易周期诊断（只检查不下单）
+```bash
+# Windows
+python C:\Users\<username>\.openclaw\workspace\scripts\trade_cycle_check.py
+
+# Linux
+python3 ~/.openclaw/workspace/scripts/trade_cycle_check.py
+```
+
 ---
 
 ## 📁 项目结构
@@ -246,14 +266,18 @@ tomokx-skill/
 │   ├── eth-trader-run.sh
 │   ├── env-check.sh
 │   ├── env-check.ps1
-│   ├── eth_market_analyzer.py
+│   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
+│   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
+│   ├── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
 │   ├── patch-okx-cli.js         # 修复 OKX CLI ProxyAgent TLS
 │   ├── hysteria-switcher.py     # (已停用)
 │   └── proxy-switcher.py        # (已停用)
 ├── scripts-openclaw/             # Linux 配套脚本
 │   ├── eth-trader-run.sh
 │   ├── env-check.sh
-│   └── eth_market_analyzer.py
+│   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
+│   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
+│   └── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
 ├── HEARTBEAT.md                  # Windows 手动版 heartbeat
 ├── HEARTBEAT-openclaw.md         # openclaw 定时调度 heartbeat
 ├── .gitignore                    # 已排除 .env.trading 等敏感文件
