@@ -1,0 +1,484 @@
+---
+name: tomokx
+description: |
+  Automated trading system for ETH-USDT-SWAP perpetual contracts on OKX.
+  Triggers on: "start trading", "run trading check", "check ETH positions",
+  "place OKX orders", "show trading status", "generate trading report".
+  Use for: executing grid trading strategy, managing open orders,
+  monitoring positions, risk control, daily reporting.
+---
+
+## Overview
+
+Direct agent-driven automated trading for ETH perpetual swaps on OKX. All core trading logic is executed step-by-step by the Agent. Auxiliary scripts exist for environment validation only and are never used for actual trade decisions.
+
+## Triggers
+
+This skill activates when you say:
+- "开始交易" / "start trading"
+- "运行交易检查" / "run trading check"
+- "查看ETH仓位" / "check ETH positions"
+- "下单" / "place orders"
+- "交易状态" / "trading status"
+- "生成日报" / "generate daily report"
+- "重置止损计数" / "reset stop counter"
+
+## Trading Strategy
+
+### Trend Detection
+
+| 24h Change | Trend    | Long Orders | Short Orders |
+| ---------- | -------- | ----------- | ------------ |
+| > +2%      | Bullish  | 2           | 1            |
+| < -2%      | Bearish  | 1           | 2            |
+| -2% to +2% | Sideways | 1           | 2            |
+
+**Additional Confirmation (Optional):**
+- Check 1h trend for short-term confirmation
+- Check 4h trend for medium-term direction
+- Volume increase > 20% avg confirms trend strength
+
+<br />
+
+### Dynamic Price Gap
+
+| Total Positions | Gap (USDT) |
+| --------------- | ---------- |
+| 0               | 5          |
+| 1               | 6          |
+| 2               | 7          |
+| 3               | 8          |
+| 4               | 9          |
+| 5               | 10         |
+| 6               | 10         |
+| 7-10            | 11         |
+| 11-15           | 12         |
+| 16-20           | 14         |
+
+**Note:** Maximum gap (14 USDT) and the dense grid ensure the farthest order (8th order from current price) stays within ~60 USDT.
+
+**Gap Adjustment Factors:**
+- High volatility (ATR > 5): increase gap by 20%
+- Wide spread (> 0.5 USDT): increase gap by 10%
+- Strong trend (|change| > 5%): increase gap by 15%
+
+<br />
+
+### Risk Controls
+
+- Max Orders: 20 open orders
+- Max Total: 20 total positions (orders + holdings)
+- Price Threshold: Cancel orders >60 USDT away from current price
+- Stop Protection: Pause trading after 3 consecutive stop-losses
+- Per-Order TP/SL: Each order has built-in take-profit and stop-loss
+- Order Size: 0.1 contracts (≈ 2 USDT margin @ 10x)
+- Leverage: 10x isolated margin
+- Daily Loss Limit: Stop trading if daily loss > 40 USDT
+- Max Consecutive Orders: Max 5 new orders per cycle
+
+## Execution Workflow
+
+### Step 0: Environment Setup
+
+Before any OKX CLI operation, always run:
+```bash
+source ~/.openclaw/workspace/.env.trading
+```
+
+**Auto-switch proxy node if needed:**
+```bash
+python3 ~/.openclaw/workspace/scripts/hysteria-switcher.py
+```
+If the script exits with non-zero code, STOP execution and notify the user: "所有代理节点均不可用，交易检查中止。"
+
+Verify proxy and API connectivity. Execute this test command; if it does not return data containing "last", wait 2 seconds and retry up to 3 times:
+```bash
+source ~/.openclaw/workspace/.env.trading && proxychains4 -f /etc/proxychains.conf curl -s --max-time 15 https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT-SWAP 2>/dev/null | grep last
+```
+
+If all 3 retries fail, STOP execution and notify the user.
+
+**Important:** proxychains4 spawns a new process and does NOT automatically inherit unsourced env vars. Always source .env.trading first.
+
+**Proxy Node Pool (managed by hysteria-switcher.py):**
+- hk1.lovehonor.top:9301
+- hk2.lovehonor.top:9301
+- jp1.lovehonor.top:9301
+- jp2.lovehonor.top:9301
+- sg1.lovehonor.top:9301
+- sg2.lovehonor.top:9301
+- kr1.lovehonor.top:9301
+- kr2.lovehonor.top:9301
+- us1.lovehonor.top:9301
+- in1.lovehonor.top:9301
+- gb1.lovehonor.top:9301
+- th1.lovehonor.top:9301
+
+### Step 1: Check Trading Status
+
+**1.1 Check Stop Protection:**
+
+Read `~/.openclaw/workspace/.trading_stopped`. If it exists and contains a number ≥ 3:
+- Notify the user: 🛑 交易已暂停 / 连续止损次数: X / 已达到最大允许次数，交易自动暂停
+- STOP execution
+
+To reset: `echo 0 > ~/.openclaw/workspace/.trading_stopped`
+
+**1.2 Check Daily Loss Limit:**
+
+Calculate today's realized P&L from positions closed today (use account bills or log analysis). If daily loss > 40 USDT:
+- Notify the user: ⚠️ 日亏损限制触发 / 今日亏损: X USDT / 已停止交易
+- STOP execution
+- Log: `[timestamp] Daily loss limit reached: X USDT, trading stopped`
+
+### Step 1.5: Fetch Market Snapshot
+
+Run the data aggregator script to collect all market data, orders, positions, and balance in one shot:
+```bash
+python3 ~/.openclaw/workspace/scripts/eth_market_analyzer.py
+```
+
+Parse the JSON output. If the script fails (non-zero exit or no JSON), fall back to the individual CLI commands in Steps 2–4.
+
+**Key fields to extract:**
+- `market.last` → current price
+- `market.change24h_pct` → 24h change
+- `hourly_stats.volatility_1h` → 1h average range
+- `hourly_stats.trend_1h` → bullish / bearish / sideways
+- `hourly_stats.recent_change_1h_pct` → recent 1–3h change
+- `orders` → live orders list
+- `positions` → current positions list
+- `balance` → account balance list
+
+### Step 2: Get Market Data
+
+Use the OKX CLI to fetch ETH-USDT-SWAP ticker data. **Prefer using the JSON output from Step 1.5.** If Step 1.5 failed, run:
+```bash
+source ~/.openclaw/workspace/.env.trading
+proxychains4 -f /etc/proxychains.conf okx market ticker ETH-USDT-SWAP
+```
+
+Parse the response and determine trend. Use both **1h stats** (`hourly_stats`) and **24h change** (`market.change24h_pct`) for a combined decision:
+- If `recent_change_1h_pct` strongly disagrees with `change24h_pct`, trust the 1h trend (shorter-term momentum matters more for grid placement).
+- Default rules:
+  - `change24h_pct` > +2 **and** 1h trend bullish → **Bullish**
+  - `change24h_pct` < -2 **and** 1h trend bearish → **Bearish**
+  - Otherwise → **Sideways**
+- In ambiguous cases (e.g. 24h bullish but 1h bearish), lean **Sideways** or slightly reduce directional bias.
+
+### Step 3: Check Current Orders
+
+Count only live ETH-USDT-SWAP orders with size 0.1. **Prefer using `orders` from Step 1.5.** If unavailable, run:
+```bash
+source ~/.openclaw/workspace/.env.trading
+proxychains4 -f /etc/proxychains.conf okx swap orders
+```
+Filter: instId = ETH-USDT-SWAP AND type = limit AND sz = 0.1 AND state = live.
+Only count opening-direction orders (sell+short or buy+long).
+
+### Step 4: Check Current Positions
+
+Count only 10x isolated ETH-USDT-SWAP positions. **Prefer using `positions` from Step 1.5.** If unavailable, run:
+```bash
+source ~/.openclaw/workspace/.env.trading
+proxychains4 -f /etc/proxychains.conf okx swap positions
+```
+Filter: instId = ETH-USDT-SWAP AND lever = 10.
+
+### Step 5: Calculate Totals
+
+- short_orders_count = number of live sell/short 0.1 orders
+- long_orders_count = number of live buy/long 0.1 orders
+- short_pos_units = total short position size / 0.1
+- long_pos_units = total long position size / 0.1
+- orders_count = short_orders_count + long_orders_count
+- positions_count = short_pos_units + long_pos_units
+- total = orders_count + positions_count
+
+### Step 6: Cancel Far Orders
+
+If Step 1.5 succeeded, use `market.last` as current price. Then for each live 0.1 order:
+If |order_price - current_price| > 60 USDT, cancel it:
+```bash
+source ~/.openclaw/workspace/.env.trading
+proxychains4 -f /etc/proxychains.conf okx swap cancel --instId ETH-USDT-SWAP --ordId <order_id>
+```
+
+**Log cancelled orders:**
+```
+[timestamp] Cancelled order <ord-id>: price <order_price> too far from current <current_price>
+```
+
+### Step 7: Determine Target Order Distribution
+
+| Trend    | target_long | target_short |
+| -------- | ----------- | ------------ |
+| Bullish  | 2           | 1            |
+| Bearish  | 1           | 2            |
+| Sideways | 1           | 2            |
+
+### Step 8: Manage Orders
+
+**Open New Orders:**
+- Condition: orders_count < 20 AND total < 20
+- Calculate: need_orders = min(20 - orders_count, 20 - total, 5)
+
+**Replenish Orders (if below minimum):**
+- Condition: orders_count < 10 AND total < 20
+- Calculate: replenish_count = min(10 - orders_count, 20 - total, 5)
+
+**Order Placement Steps:**
+1. Start with the base dynamic gap from the table above (`0–20` positions mapped to 5–14 USDT).
+2. **Adjust gap based on 1h volatility (from Step 1.5):**
+   - `volatility_1h` < 8 → gap can decrease by 1–2 (denser grid)
+   - `volatility_1h` 8–15 → use base gap
+   - `volatility_1h` > 15 → gap can increase by 2–4 (wider grid)
+   - `volatility_1h` > 25 → further increase gap or pause new orders
+   - **AI discretion:** you may vary the exact adjustment within ±3 USDT based on the full context.
+3. Check spread (`askPx - bidPx`). If > 0.5 USDT, add 1 to gap.
+4. Decide side: Prefer the side with fewer total positions
+5. Calculate price:
+   - Shorts: min_short_px + gap (or current_price * 1.002 if no short orders)
+   - Longs: max_long_px - gap (or current_price * 0.998 if no long orders)
+6. Round price to 2 decimal places before placing
+7. Check price conflicts: ensure ≥ 8 USDT apart from existing orders on the same side
+   - If conflict detected (price too close), **SKIP this order** and continue to next
+8. Calculate TP/SL:
+   - **TP** = entry_price ± a dynamic offset in the range **10–50 USDT**, chosen by the Agent based on current market conditions (volatility, trend strength, and recent price action).
+   - **SL** = entry_price ∓ a dynamic offset in the range **80–120 USDT**, chosen by the Agent based on current market conditions.
+     - Long: TP = entry + offset_tp, SL = entry - offset_sl
+     - Short: TP = entry - offset_tp, SL = entry + offset_sl
+   - Round TP and SL to 2 decimals.
+9. Place order with TP/SL attached:
+```bash
+source ~/.openclaw/workspace/.env.trading
+proxychains4 -f /etc/proxychains.conf okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordType limit --sz 0.1 --px=<px> --posSide <short|long> --tpTriggerPx=<tp> --tpOrdPx=-1 --slTriggerPx=<sl> --slOrdPx=-1
+```
+
+After each placement, update counters and re-check limits before placing the next order.
+
+### Step 9: Calculate TP/SL
+
+See Step 8 placement steps for exact formulas. TP uses a dynamic 10–50 USDT offset and SL uses a dynamic 80–120 USDT offset based on market conditions. Round all prices to 2 decimals.
+
+### Step 10: Log and Notify
+
+**Append to Log File:**
+```
+[timestamp] | tomokx | Trading Cycle Summary
+- Market Trend: <Bullish/Bearish/Sideways>
+- Current Price: <price> USDT
+- Orders: <orders_count> live, <new_placed> new placed
+- Positions: <positions_count> open
+- Total Exposure: <total>/20
+- Actions: <list of actions taken>
+```
+
+**Send Notification to User:**
+
+After completing all trading actions, format and display a summary notification:
+
+```
+📊 ETH Trader 执行完成
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ 时间: <timestamp>
+📈 趋势: <Bullish/Bearish/Sideways>
+💰 价格: <price> USDT
+📋 挂单: <orders_count>/20
+💼 持仓: <positions_count>
+📊 总暴露: <total>/20
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📝 操作记录:
+• <action 1>
+• <action 2>
+• ...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Notification Rules:**
+- Always notify after completing Step 10
+- Include key metrics (trend, price, orders, positions)
+- List all actions taken in this cycle
+- Highlight important events (orders placed, cancelled, errors)
+- Use emoji for better readability
+
+**Special Notifications:**
+
+If trading was paused (Step 1 stop triggered):
+```
+🛑 交易已暂停
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ 连续止损次数: <count>
+⏸️ 交易已自动暂停，请检查策略
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+If daily loss limit reached:
+```
+⚠️ 日亏损限制触发
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📉 今日亏损: <loss> USDT
+🚫 已停止交易，明日自动恢复
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Step 11: Daily Report (Optional)
+
+Query and summarize:
+```bash
+source ~/.openclaw/workspace/.env.trading
+proxychains4 -f /etc/proxychains.conf okx swap positions
+proxychains4 -f /etc/proxychains.conf okx swap orders
+proxychains4 -f /etc/proxychains.conf okx account balance
+tail -n 50 ~/.openclaw/workspace/auto_trade.log
+```
+
+Generate summary report with P&L analysis.
+
+## OKX CLI Commands Reference (Current CLI 1.2.7)
+
+### Get Market Data
+```bash
+proxychains4 okx market ticker ETH-USDT-SWAP
+```
+
+### List Orders
+```bash
+proxychains4 okx swap orders
+```
+
+### Place Order with TP/SL
+```bash
+proxychains4 okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordType limit --sz 0.1 --px=<px> --posSide <short|long> --tpTriggerPx=<tp> --tpOrdPx=-1 --slTriggerPx=<sl> --slOrdPx=-1
+```
+
+### Cancel Order
+```bash
+proxychains4 okx swap cancel --instId ETH-USDT-SWAP --ordId <order_id>
+```
+
+### Get Positions
+```bash
+proxychains4 okx swap positions
+```
+
+### Get Account Balance
+```bash
+proxychains4 okx account balance
+```
+
+## Network Retry Rule
+
+Any `proxychains4 okx` or `proxychains4 curl` call that fails with network/timeout errors must be retried up to 3 times with a 2-second sleep between attempts. If all retries fail, STOP execution and notify the user with the error details.
+
+## Error Handling
+
+### API Rate Limit (429)
+- Wait 10 seconds before retry
+- Reduce command frequency
+- Log rate limit event
+
+### Insufficient Balance
+- Skip order placement
+- Log warning: "Insufficient margin, skipping order"
+- Continue to next cycle
+- Notify user if balance < 50 USDT
+
+### Order Rejection
+- Log rejection reason
+- Check price is within valid range
+- Retry with adjusted price (± 1 USDT) if needed
+- Max 2 retries per order
+
+### Network Timeout
+- Apply retry rule (3 attempts with 2s delay)
+- If all retries fail, log error and skip cycle
+- Notify user after 3 consecutive network failures
+
+### Market Anomaly Detection
+Pause trading if:
+- Price changes > 10% in 1 minute (flash crash/pump)
+- Spread > 2 USDT (liquidity issue)
+- No market data for > 30 seconds
+
+## Quick Commands Reference
+
+### Run Trading Check
+Execute Steps 0-10 completely.
+
+**Usage:** "开始交易" or "run trading check"
+
+### Show Status
+Execute Steps 0, 2, 3, 4 and report current state without placing orders.
+
+**Usage:** "交易状态" or "show trading status"
+
+### Reset Stop Counter
+Reset the consecutive stop-loss counter to 0 and resume trading.
+
+```bash
+echo 0 > ~/.openclaw/workspace/.trading_stopped
+```
+
+**Usage:** "重置止损计数" or "reset stop counter"
+
+**After reset, notify user:**
+```
+✅ 止损计数已重置
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔢 连续止损次数: 0
+▶️ 交易已恢复
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Generate Daily Report
+Query positions, orders, balance, and summarize recent activity from logs.
+
+**Usage:** "生成日报" or "generate daily report"
+
+## Risk Warning
+
+Trading involves significant risk of loss. This system uses leveraged trading which can amplify both gains and losses. Never trade with money you cannot afford to lose. Monitor positions regularly.
+
+**Important Risk Disclosures:**
+- 10x leverage means 10% price move = 100% position loss
+- Stop-losses are not guaranteed to execute at exact price
+- Market gaps can cause larger losses than expected
+- Past performance does not guarantee future results
+
+## 辅助脚本 (仅用于环境检查，不参与交易决策)
+
+### 1. eth-trader-run.sh
+Wrapper script for environment validation only. Does NOT execute trading decisions.
+
+### 2. env-check.sh
+快速验证 ETH Trader 交易环境。
+
+## Configuration
+
+### Environment Variables (.env.trading)
+
+```bash
+# OKX API Credentials
+export OKX_API_KEY="your-api-key"
+export OKX_SECRET_KEY="your-secret-key"
+export OKX_PASSPHRASE="your-passphrase"
+
+# Trading Parameters
+export MAX_ORDERS=20
+export MAX_TOTAL=20
+export ORDER_SIZE=0.1
+export LEVERAGE=10
+export DAILY_LOSS_LIMIT=40
+```
+
+### File Structure
+
+```
+~/.openclaw/workspace/
+├── .env.trading          # API keys and config
+├── .trading_stopped      # Stop counter (0-3+)
+├── auto_trade.log        # Trading activity log
+└── skills/tomokx/
+    └── SKILL.md          # This file
+```

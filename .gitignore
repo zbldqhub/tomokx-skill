@@ -6,6 +6,7 @@
 *.log
 logs/
 auto_trade.log
+trading/
 
 # Trading data
 .trading_stopped
@@ -37,3 +38,8 @@ build/
 
 # Local config
 config.local.json
+
+# Backup files
+*.tar.gz
+*.zip
+*.bak
