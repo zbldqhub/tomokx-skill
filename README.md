@@ -283,9 +283,12 @@ tomokx-skill/
 │   ├── env-check.sh
 │   ├── env-check.ps1
 │   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
+│   ├── execute_orders.py        # 批量下单/撤单执行器
 │   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
 │   ├── log_trade.py             # 交易日志自动写入
+│   ├── prepare_trade_data.py    # 一键聚合交易前置数据
 │   ├── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
+│   ├── update_stop_counter.py   # 更新止损计数器
 │   ├── patch-okx-cli.js         # 修复 OKX CLI ProxyAgent TLS
 │   ├── hysteria-switcher.py     # (已停用)
 │   └── proxy-switcher.py        # (已停用)
@@ -293,15 +296,18 @@ tomokx-skill/
 │   ├── eth-trader-run.sh
 │   ├── env-check.sh
 │   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
+│   ├── execute_orders.py        # 批量下单/撤单执行器
 │   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
 │   ├── log_trade.py             # 交易日志自动写入
 │   ├── okx_account_balance.py   # 账户余额查询
+│   ├── prepare_trade_data.py    # 一键聚合交易前置数据
 │   ├── run_analyzer.py          # 快速运行市场分析
 │   ├── run_balance.py           # 快速运行余额查询
 │   ├── run_bills.py             # 快速运行账单查询
 │   ├── run_get_bills.sh         # 账单查询 shell 脚本
 │   ├── run_place.py             # 下单/撤单执行器
-│   └── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
+│   ├── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
+│   └── update_stop_counter.py   # 更新止损计数器
 ├── HEARTBEAT.md                  # Windows 手动版 heartbeat
 ├── HEARTBEAT-openclaw.md         # openclaw 定时调度 heartbeat
 ├── .gitignore                    # 已排除 .env.trading 等敏感文件

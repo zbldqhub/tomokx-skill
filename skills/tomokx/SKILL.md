@@ -42,46 +42,39 @@ description: "Automated ETH-USDT-SWAP grid trading on OKX. Triggers: start tradi
 
 ## Execution Steps
 
-**Step 0:** Source env before any command:
+### Phase 1: Data Preparation (Scripted)
+
+Run the prepared data script. It loads env, checks risk, fetches market/orders/positions, and outputs a JSON payload.
+
 ```powershell
-$env:OKX_API_KEY=(Get-Content "$WORKSPACE\.env.trading" | Select-String "OKX_API_KEY").ToString().Split('"')[1]
-$env:OKX_SECRET_KEY=(Get-Content "$WORKSPACE\.env.trading" | Select-String "OKX_SECRET_KEY").ToString().Split('"')[1]
-$env:OKX_PASSPHRASE=(Get-Content "$WORKSPACE\.env.trading" | Select-String "OKX_PASSPHRASE").ToString().Split('"')[1]
+python "$env:USERPROFILE\.openclaw\workspace\scripts\prepare_trade_data.py"
 ```
-Or in Git Bash: `source $WORKSPACE/.env.trading`
 
-**Step 1:** Check `$WORKSPACE/.trading_stopped`. If ≥ 3 → stop. If date < today → reset to 0.
+**What it does (non-AI):**
+- Loads API credentials
+- Checks `.trading_stopped` count
+- Checks daily P&L limit
+- Fetches market ticker + 1h candles
+- Classifies live `sell+short` and `buy+long` orders
+- Counts 10x isolated positions
+- Calculates `total` and `remaining_capacity`
+- Identifies far orders (>100 USDT away)
+- Computes suggested `gap`
+- Counts today's losing closes
 
-**Step 1.2:** Check daily loss:
-```powershell
-python $WORKSPACE/scripts/get_bills.py --today
-```
-Filter `instId=ETH-USDT-SWAP` and `subType ∈ {4,6,110,111,112}`. Sum all `pnl`. If net < -40 → stop.
+If `should_stop` is true in the JSON output, stop immediately and notify the user with the `stop_reason`.
 
-**Step 1.5:** Fetch snapshot:
-```powershell
-python $WORKSPACE/scripts/eth_market_analyzer.py
-```
-Extract: `market.last`, `market.change24h_pct`, `hourly_stats.trend_1h`, `hourly_stats.volatility_1h`, `orders`, `positions`, `balance`.
+---
 
-**Step 2:** Determine trend. Prefer 1h trend over 24h when they conflict.
+### Phase 2: AI Analysis & Decision
 
-**Step 3:** Count live `sell+short` and `buy+long` orders (`limit`, `sz=0.1`).
+Read the JSON output from Phase 1. AI performs the following steps:
 
-**Step 4:** Count 10x isolated ETH-USDT-SWAP positions.
-
-**Step 5:** Calculate totals.
-- `total = orders_count + positions_count`
-- `remaining_capacity = floor(20 - total)`
-
-**Step 6:** Cancel live orders where `|price - current| > 100`.
-```bash
-okx swap cancel --instId ETH-USDT-SWAP --ordId <id>
-```
+**Step 2:** Determine trend. Prefer `trend_1h` over `change24h_pct` when they conflict.
 
 **Step 7:** Determine target distribution from the trend table.
 
-**Step 8:** Place/replenish orders.
+**Step 8:** Plan orders.
 - Conditions: `total < 20`, `remaining_capacity > 0`, per-side ≤ 4.
 - `replenish_count = min(10 - orders_count, remaining_capacity, 5)`.
 - **Absolute distance cap:** Do NOT place orders ≥ 80 USDT from current price.
@@ -105,16 +98,53 @@ okx swap cancel --instId ETH-USDT-SWAP --ordId <id>
   - Long order: `tpTriggerPx > px` AND `slTriggerPx < px`
   - Short order: `tpTriggerPx < px` AND `slTriggerPx > px`
   - If this check fails, **DO NOT place the order**. Recalculate TP/SL and re-check. If still invalid, skip this order and log the error.
-- Place command:
-```bash
-okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordType limit --sz 0.1 --px=<px> --posSide <short|long> --tpTriggerPx=<tp> --tpOrdPx=-1 --slTriggerPx=<sl> --slOrdPx=-1
+
+AI must produce a `plan.json` file describing cancellations and placements:
+
+```json
+{
+  "cancellations": [
+    {"instId": "ETH-USDT-SWAP", "ordId": "123456"}
+  ],
+  "placements": [
+    {
+      "instId": "ETH-USDT-SWAP",
+      "tdMode": "isolated",
+      "side": "sell",
+      "ordType": "limit",
+      "sz": "0.1",
+      "px": "2301.75",
+      "posSide": "short",
+      "tpTriggerPx": "2263.75",
+      "slTriggerPx": "2411.75"
+    }
+  ]
+}
 ```
 
-**Step 8.5:** Run `get_bills.py --today`. Filter `subType ∈ {4,6,110,111,112}` and `pnl < 0`. Increment `.trading_stopped` for each. If count reaches ≥ 3 → stop.
+Save it to:
+```powershell
+$env:TEMP + "\tomokx_plan.json"
+```
 
-**Step 10:** Log and notify.
+---
 
-First, write the log via script:
+### Phase 3: Execution (Scripted)
+
+Execute the AI-generated plan:
+
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_orders.py" ($env:TEMP + "\tomokx_plan.json")
+```
+
+Then update the stop-loss counter:
+
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\update_stop_counter.py"
+```
+
+Finally, write the log:
+
 ```powershell
 python "$env:USERPROFILE\.openclaw\workspace\scripts\log_trade.py" `
   --trend "<trend>" `
@@ -125,7 +155,7 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\log_trade.py" `
   --actions "<actions>"
 ```
 
-Then notify with:
+Notify with:
 ```
 📊 ETH Trader 执行完成
 趋势: <trend> | 价格: <price> | 挂单: <orders>/20 | 持仓: <positions> | 总暴露: <total>/20
