@@ -231,37 +231,16 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\notify.py" "即将执行交
 
 # Step 4 · 执行交易计划
 
-调用 `execute_orders.py` 执行 AI 审核通过的 `plan.json`：
+调用 `execute_and_finalize.py` 一步完成订单执行、止损计数器更新、日志记录和通知发送：
 ```powershell
-python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_orders.py" ($env:TEMP + "\tomokx_plan.json")
+python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_and_finalize.py" ($env:TEMP + "\tomokx_plan.json")
 ```
 
-**执行失败处理**：
-- 若输出中出现 **余额不足 / 价格已失效** 等错误：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划（减少数量或调整价格），再次执行。
-- 若出现 **Rate limit (429)**：等待 10 秒后整体重试一次。
-- 若出现 **其他错误**：跳过该单，记录原因到日志，继续执行剩余订单。
-
-调用 `update_stop_counter.py` 更新止损计数器：
-```powershell
-python "$env:USERPROFILE\.openclaw\workspace\scripts\update_stop_counter.py"
-```
-若输出 `should_stop` 为 true，立即停止并通知用户。
-
-调用 `log_trade.py` 记录日志：
-```powershell
-python "$env:USERPROFILE\.openclaw\workspace\scripts\log_trade.py" `
-  --trend "<trend>" `
-  --price "<price>" `
-  --orders "<orders>" `
-  --positions "<positions>" `
-  --total "<total>" `
-  --actions "<actions>"
-```
-
-最后通知用户执行摘要（并发送通知）：
-```powershell
-python "$env:USERPROFILE\.openclaw\workspace\scripts\notify.py" "📊 ETH Trader 执行完成`n趋势: <trend> | 价格: <price> | 挂单: <orders>/20 | 持仓: <positions> | 总暴露: <total>/20`n操作: <actions>"
-```
+**执行失败处理**（已由脚本内部处理）：
+- 若输出中出现 **余额不足 / 价格已失效** 等错误：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划（减少数量或调整价格），再次执行 `execute_and_finalize.py`。
+- 若出现 **Rate limit (429)**：脚本内部等待 10 秒后自动重试一次。
+- 若出现 **其他错误**：脚本内部跳过该单，记录原因到日志，继续执行剩余订单。
+- 若 `stop_counter` 输出 `should_stop` 为 true，脚本以退出码 2 结束，应立即停止并通知用户。
 
 ---
 

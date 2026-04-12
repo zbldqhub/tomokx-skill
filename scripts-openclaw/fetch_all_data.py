@@ -9,10 +9,15 @@ import sys
 import json
 import math
 import time
+import urllib.request
 import concurrent.futures
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from config import API_KEY, WORKSPACE, ENV_FILE, MAX_TOTAL, ORDER_SIZE, LEVERAGE, CANCEL_THRESHOLD, base_gap, calc_tp_sl_offset
+from config import (
+    API_KEY, SECRET, PASSPHRASE, WORKSPACE, ENV_FILE, MAX_TOTAL, ORDER_SIZE, LEVERAGE,
+    CANCEL_THRESHOLD, STOP_FILE, DAILY_LOSS_LIMIT,
+    base_gap, ensure_api_ready
+)
 
 BASE = os.environ.get("OKX_BASE_URL", "https://www.okx.com")
 
@@ -56,6 +61,7 @@ def run_script(name, *args):
         return {"error": f"{name} returned invalid JSON", "raw": r.stdout[:500], "_diag": diag}
 
 
+# --- Public market data ---
 def fetch_public(path):
     import urllib.request
     t0 = time.time()
@@ -130,8 +136,181 @@ def fetch_market():
     }, {"ticker": ticker_diag, "candle": candle_diag}
 
 
+# --- Inlined risk check (was check_risk.py) ---
+def _iso_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _sign(timestamp, method, request_path, body=""):
+    if body and isinstance(body, (dict, list)):
+        body = json.dumps(body)
+    import base64, hmac, hashlib
+    message = timestamp + method.upper() + request_path + (body or "")
+    mac = hmac.new(SECRET.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
+    return base64.b64encode(mac.digest()).decode("utf-8")
+
+
+def _fetch_auth(path):
+    timestamp = _iso_now()
+    headers = {
+        "OK-ACCESS-KEY": API_KEY,
+        "OK-ACCESS-SIGN": _sign(timestamp, "GET", path),
+        "OK-ACCESS-TIMESTAMP": timestamp,
+        "OK-ACCESS-PASSPHRASE": PASSPHRASE,
+    }
+    proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+    if proxy:
+        handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        opener = urllib.request.build_opener(handler)
+        req = urllib.request.Request(BASE + path, headers=headers)
+        with opener.open(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    else:
+        req = urllib.request.Request(BASE + path, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+
+def _read_trading_stopped():
+    if not os.path.exists(STOP_FILE):
+        return 0
+    mtime = datetime.fromtimestamp(os.path.getmtime(STOP_FILE), tz=timezone.utc)
+    today = datetime.now(timezone.utc).date()
+    if mtime.date() != today:
+        return 0
+    try:
+        with open(STOP_FILE, "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+
+def _fetch_today_bills():
+    ensure_api_ready()
+    today = datetime.now(timezone.utc).date()
+    begin = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+    end = begin + timedelta(days=1)
+    begin_ms = int(begin.timestamp() * 1000)
+    end_ms = int(end.timestamp() * 1000)
+    path = f"/api/v5/account/bills?instType=SWAP&instId=ETH-USDT-SWAP&begin={begin_ms}&end={end_ms}&limit=100"
+    try:
+        return _fetch_auth(path)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _calc_risk(bills_data):
+    if not isinstance(bills_data, dict) or bills_data.get("code") != "0":
+        return {"daily_pnl": 0.0, "matched": 0, "sl_count": 0}
+    records = bills_data.get("data", [])
+    daily_pnl = 0.0
+    matched = 0
+    sl_count = 0
+    for r in records:
+        if r.get("instId") != "ETH-USDT-SWAP":
+            continue
+        sub = int(r.get("subType", -1))
+        if sub not in {4, 6, 110, 111, 112}:
+            continue
+        pnl = float(r.get("pnl", "0") or "0")
+        daily_pnl += pnl
+        matched += 1
+        if pnl < 0:
+            sl_count += 1
+    return {"daily_pnl": daily_pnl, "matched": matched, "sl_count": sl_count}
+
+
+def build_risk():
+    stopped = _read_trading_stopped()
+    bills = _fetch_today_bills()
+    if "error" in bills:
+        return {"error": bills["error"]}, {"elapsed_ms": 0, "error": bills["error"]}
+
+    risk_vals = _calc_risk(bills)
+    should_stop = False
+    reason = ""
+    if stopped >= 3:
+        should_stop = True
+        reason = f"Consecutive stop-loss limit reached ({stopped} >= 3)"
+    elif risk_vals["daily_pnl"] < DAILY_LOSS_LIMIT:
+        should_stop = True
+        reason = f"Daily loss limit exceeded ({risk_vals['daily_pnl']} USDT)"
+
+    return {
+        "should_stop": should_stop,
+        "stop_reason": reason,
+        "stopped_count": stopped,
+        "daily_pnl": round(risk_vals["daily_pnl"], 4),
+        "daily_pnl_matched_records": risk_vals["matched"],
+        "sl_count_today": risk_vals["sl_count"],
+    }, {"elapsed_ms": 0, "error": ""}
+
+
+# --- Inlined exposure calc (was calc_exposure.py) ---
+def classify_orders(orders_list):
+    short, long = 0, 0
+    for o in orders_list:
+        if o.get("instId") != "ETH-USDT-SWAP" or o.get("state") != "live":
+            continue
+        if o.get("ordType") != "limit":
+            continue
+        side = o.get("side")
+        pos_side = o.get("posSide")
+        if side == "sell" and pos_side == "short":
+            short += 1
+        elif side == "buy" and pos_side == "long":
+            long += 1
+    return short, long
+
+
+def classify_positions(positions_list):
+    short_pos, long_pos = 0.0, 0.0
+    for p in positions_list:
+        if p.get("instId") != "ETH-USDT-SWAP":
+            continue
+        if str(p.get("lever")) != str(LEVERAGE):
+            continue
+        if p.get("mgnMode") != "isolated":
+            continue
+        sz = float(p.get("pos", "0") or "0")
+        if p.get("posSide") == "short":
+            short_pos += sz
+        elif p.get("posSide") == "long":
+            long_pos += sz
+    return short_pos, long_pos
+
+
+def build_exposure(orders, positions):
+    orders_list = orders.get("data", []) if isinstance(orders, dict) else []
+    positions_list = positions.get("data", []) if isinstance(positions, dict) else []
+
+    short_orders, long_orders = classify_orders(orders_list)
+    short_pos, long_pos = classify_positions(positions_list)
+
+    short_pos_units = round(short_pos / ORDER_SIZE, 1)
+    long_pos_units = round(long_pos / ORDER_SIZE, 1)
+    orders_count = short_orders + long_orders
+    positions_count = round(short_pos_units + long_pos_units, 1)
+    total = round(orders_count + positions_count, 1)
+    remaining = math.floor(MAX_TOTAL - total)
+
+    return {
+        "short_orders": short_orders,
+        "long_orders": long_orders,
+        "orders_count": orders_count,
+        "short_pos": short_pos,
+        "long_pos": long_pos,
+        "short_pos_units": short_pos_units,
+        "long_pos_units": long_pos_units,
+        "positions_count": positions_count,
+        "total": total,
+        "remaining_capacity": remaining,
+    }
+
+
+# --- Main ---
 def main():
-    # Step 1: market data (fast public API, run directly)
+    # Step 1: market data
     market, market_diag = fetch_market()
     if "error" in market:
         payload = {"error": f"fetch_market failed: {market['error']}", "diagnostics": {"market": market_diag}}
@@ -139,21 +318,22 @@ def main():
         sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         sys.exit(1)
 
-    # Step 2: concurrent private/authenticated fetches
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        future_risk = executor.submit(run_script, "check_risk.py")
+    # Step 2: concurrent private/authenticated fetches (orders, positions, history) + inline risk
+    t0_risk = time.time()
+    risk, _ = build_risk()
+    risk_elapsed = round((time.time() - t0_risk) * 1000, 1)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_orders = executor.submit(run_script, "fetch_orders.py")
         future_positions = executor.submit(run_script, "fetch_positions.py")
         future_history = executor.submit(run_script, "analyze_history.py")
-
-        risk = future_risk.result()
         orders = future_orders.result()
         positions = future_positions.result()
         history = future_history.result()
 
     # Validate critical results
     errors = []
-    for name, data in [("check_risk", risk), ("fetch_orders", orders), ("fetch_positions", positions)]:
+    for name, data in [("fetch_orders", orders), ("fetch_positions", positions)]:
         if isinstance(data, dict) and "error" in data:
             errors.append(f"{name}: {data['error']}")
     if errors:
@@ -161,7 +341,7 @@ def main():
             "error": "; ".join(errors),
             "diagnostics": {
                 "market": market_diag,
-                "risk": risk.get("_diag") if isinstance(risk, dict) else None,
+                "risk": {"elapsed_ms": risk_elapsed, "error": risk.get("error", "")},
                 "orders": orders.get("_diag") if isinstance(orders, dict) else None,
                 "positions": positions.get("_diag") if isinstance(positions, dict) else None,
                 "history": history.get("_diag") if isinstance(history, dict) else None,
@@ -171,25 +351,10 @@ def main():
         sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         sys.exit(1)
 
-    # Exposure (write temp files because calc_exposure expects file paths)
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as fo:
-        json.dump(orders, fo)
-        orders_path = fo.name
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as fp:
-        json.dump(positions, fp)
-        positions_path = fp.name
-    exposure = run_script("calc_exposure.py", orders_path, positions_path)
-    try:
-        os.remove(orders_path)
-        os.remove(positions_path)
-    except Exception:
-        pass
-    if "error" in exposure:
-        payload = {"error": f"calc_exposure failed: {exposure['error']}", "diagnostics": {"market": market_diag}}
-        print(json.dumps(payload, ensure_ascii=False))
-        sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-        sys.exit(1)
+    # Inline exposure calc
+    t0_exp = time.time()
+    exposure = build_exposure(orders, positions)
+    exposure_elapsed = round((time.time() - t0_exp) * 1000, 1)
 
     total = exposure.get("total", 0)
 
@@ -218,6 +383,16 @@ def main():
     targets = {"bullish": (2, 1), "bearish": (1, 2), "sideways": (1, 2)}
     target_long, target_short = targets.get(trend, (1, 2))
 
+    # Imbalance adjustment
+    long_total = exposure.get("long_orders", 0) + exposure.get("long_pos_units", 0)
+    short_total = exposure.get("short_orders", 0) + exposure.get("short_pos_units", 0)
+    imbalance = abs(long_total - short_total)
+    if imbalance >= 3:
+        if long_total > short_total and target_long > 0:
+            target_long = max(0, target_long - 1)
+        elif short_total > long_total and target_short > 0:
+            target_short = max(0, target_short - 1)
+
     strategy = {
         "trend": trend,
         "target_long": target_long,
@@ -227,6 +402,7 @@ def main():
         "volatility_1h": vol,
         "spread": spread,
         "change24h_pct": change24h,
+        "imbalance_score": round(imbalance, 1),
     }
 
     # Far orders
@@ -264,11 +440,11 @@ def main():
         "liquidity_warning": liquidity_warning,
         "diagnostics": {
             "market": market_diag,
-            "risk": risk.get("_diag"),
-            "orders": orders.get("_diag"),
-            "positions": positions.get("_diag"),
-            "history": history.get("_diag"),
-            "exposure": exposure.get("_diag"),
+            "risk": {"elapsed_ms": risk_elapsed, "error": risk.get("error", "")},
+            "orders": orders.get("_diag") if isinstance(orders, dict) else None,
+            "positions": positions.get("_diag") if isinstance(positions, dict) else None,
+            "history": history.get("_diag") if isinstance(history, dict) else None,
+            "exposure": {"elapsed_ms": exposure_elapsed, "error": ""},
         },
     }
     print(json.dumps(result, indent=2, ensure_ascii=False))
