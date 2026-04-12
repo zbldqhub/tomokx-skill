@@ -1,107 +1,84 @@
 #!/usr/bin/env python3
-"""
-OKX Account Bills fetcher via REST API.
-Replaces 'okx account bills' CLI which lacks --begin/--type in v1.3.0.
-"""
+"""Simple helper to fetch OKX bills for today."""
 import os
 import sys
 import json
-import time
 import base64
 import hmac
 import hashlib
-from urllib import request, error
+import urllib.request
+from datetime import datetime, timezone, timedelta
 
-ENV_FILE = os.path.expanduser("~/.openclaw/workspace/.env.trading")
-PROXY_URL = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or ""
+def _load_env_file():
+    env_path = os.path.expanduser("~/.openclaw/workspace/.env.trading")
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:]
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip().strip('"').strip("'")
+                    if key not in os.environ:
+                        os.environ[key] = val
+
+_load_env_file()
+
+API_KEY = os.environ.get("OKX_API_KEY", "")
+SECRET = os.environ.get("OKX_SECRET_KEY", "")
+PASSPHRASE = os.environ.get("OKX_PASSPHRASE", "")
+BASE = os.environ.get("OKX_BASE_URL", "https://www.okx.com")
 
 
-def load_env():
-    env = {}
-    if not os.path.exists(ENV_FILE):
-        return env
-    with open(ENV_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("export "):
-                line = line[7:]
-            if "=" in line:
-                key, val = line.split("=", 1)
-                env[key.strip()] = val.strip().strip('"').strip("'")
-    return env
+def iso_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def sign(message, secret):
-    mac = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
+def sign(timestamp, method, request_path, body=""):
+    if body and isinstance(body, (dict, list)):
+        body = json.dumps(body)
+    message = timestamp + method.upper() + request_path + (body or "")
+    mac = hmac.new(SECRET.encode("utf-8"), message.encode("utf-8"), hashlib.sha256)
     return base64.b64encode(mac.digest()).decode("utf-8")
 
 
-def fetch_bills(inst_type="SWAP", begin_ms="", end_ms="", limit="100"):
-    env = load_env()
-    api_key = env.get("OKX_API_KEY", "")
-    secret = env.get("OKX_SECRET_KEY", "")
-    passphrase = env.get("OKX_PASSPHRASE", "")
-    if not api_key or not secret or not passphrase:
-        print(json.dumps({"error": "Missing OKX_API_KEY, OKX_SECRET_KEY or OKX_PASSPHRASE"}))
-        sys.exit(1)
-
-    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-    base_url = "https://www.okx.com"
-    path = f"/api/v5/account/bills?instType={inst_type}&limit={limit}"
-    if begin_ms:
-        path += f"&begin={begin_ms}"
-    if end_ms:
-        path += f"&end={end_ms}"
-
-    message = timestamp + "GET" + path
-    signature = sign(message, secret)
-
+def fetch(path):
+    timestamp = iso_now()
     headers = {
-        "OK-ACCESS-KEY": api_key,
-        "OK-ACCESS-SIGN": signature,
+        "OK-ACCESS-KEY": API_KEY,
+        "OK-ACCESS-SIGN": sign(timestamp, "GET", path),
         "OK-ACCESS-TIMESTAMP": timestamp,
-        "OK-ACCESS-PASSPHRASE": passphrase,
-        "Content-Type": "application/json",
+        "OK-ACCESS-PASSPHRASE": PASSPHRASE,
     }
-
-    req = request.Request(base_url + path, headers=headers, method="GET")
-    handlers = []
-    if PROXY_URL:
-        handlers.append(request.ProxyHandler({"http": PROXY_URL, "https": PROXY_URL}))
-    opener = request.build_opener(*handlers)
-
-    try:
-        with opener.open(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            print(json.dumps(data, indent=2))
-    except error.HTTPError as e:
-        body = e.read().decode("utf-8")
-        print(json.dumps({"error": "HTTPError", "code": e.code, "body": body}))
-        sys.exit(1)
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
-        sys.exit(1)
+    proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+    if proxy:
+        handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        opener = urllib.request.build_opener(handler)
+        req = urllib.request.Request(BASE + path, headers=headers)
+        with opener.open(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    else:
+        req = urllib.request.Request(BASE + path, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
 
 def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Fetch OKX account bills via REST API")
-    parser.add_argument("--instType", default="SWAP")
-    parser.add_argument("--today", action="store_true", help="Filter from today 00:00 UTC")
-    parser.add_argument("--limit", default="100")
-    args = parser.parse_args()
-
-    begin_ms = ""
-    end_ms = ""
-    if args.today:
-        now = time.time()
-        today_start = int(now - (now % 86400))
-        begin_ms = str(today_start * 1000)
-
-    fetch_bills(args.instType, begin_ms, end_ms, args.limit)
+    today = datetime.now(timezone.utc).date()
+    begin = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+    end = begin + timedelta(days=1)
+    begin_ms = int(begin.timestamp() * 1000)
+    end_ms = int(end.timestamp() * 1000)
+    path = f"/api/v5/account/bills?instType=SWAP&instId=ETH-USDT-SWAP&begin={begin_ms}&end={end_ms}&limit=100"
+    try:
+        data = fetch(path)
+        print(json.dumps(data))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
 
 
 if __name__ == "__main__":
