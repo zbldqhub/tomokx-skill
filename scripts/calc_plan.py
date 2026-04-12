@@ -189,10 +189,10 @@ def main():
     # Inner replenish boost: price moved inside grid, need to fill the gap
     long_boost_reason = ""
     short_boost_reason = ""
-    if existing_long and current_price > max(existing_long) + gap:
+    if target_long > 0 and existing_long and current_price > max(existing_long) + gap:
         long_needed = max(long_needed, 1)
         long_boost_reason = f"Price moved above all long orders (max={max(existing_long)}), boost needed=1"
-    if existing_short and current_price < min(existing_short) - gap:
+    if target_short > 0 and existing_short and current_price < min(existing_short) - gap:
         short_needed = max(short_needed, 1)
         short_boost_reason = f"Price moved below all short orders (min={min(existing_short)}), boost needed=1"
 
