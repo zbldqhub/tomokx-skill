@@ -92,6 +92,20 @@ def main():
         print(f"   理由: {rec.get('reason')}")
         print(f"   风险标记: {rec.get('risk_flags', [])}")
 
+        # 将 AI 建议的 target 合并到 strategy.json，使下游 calc_plan.py 实际执行
+        suggested_targets = rec.get("suggested_targets", {})
+        if suggested_targets:
+            strategy = all_data.get("strategy", {})
+            old_long = strategy.get("target_long")
+            old_short = strategy.get("target_short")
+            if "long" in suggested_targets:
+                strategy["target_long"] = suggested_targets["long"]
+            if "short" in suggested_targets:
+                strategy["target_short"] = suggested_targets["short"]
+            with open(paths["strategy"], "w", encoding="utf-8") as f:
+                json.dump(strategy, f, ensure_ascii=False)
+            print(f"   策略更新: target_long {old_long} → {strategy.get('target_long')}, target_short {old_short} → {strategy.get('target_short')}")
+
         # Step 3b
         print("\n[Step 3b] 生成交易草案...")
         plan = run("calc_plan.py", paths["market"], paths["exposure"], paths["strategy"], paths["far_orders"], paths["orders"])

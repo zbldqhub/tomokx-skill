@@ -97,6 +97,8 @@ python3 ~/.openclaw/workspace/scripts/calc_recommendation.py /tmp/market.json /t
 > 1. 阅读 `calc_recommendation.py` 的建议；
 > 2. 结合你自己的判断：同意、修改或否决；
 > 3. 若脚本建议 `pause` 或 `cancel_only` 但你认为可以执行，必须在最终决策中**明确说明理由**。
+>
+> **自动化合并**：`run_trade_cycle.py` 在读取 `calc_recommendation.py` 后，会自动将其 `suggested_targets`（`long` / `short`）写回 `strategy.json`，随后 `calc_plan.py` 基于更新后的策略生成草案。AI 仍可在最终审核阶段手动修改 `plan.json`。
 
 ### AI 自主检查清单（复核用）
 1. **趋势确认**：优先采用 `trend_1h`。当 `trend_1h` 与 `change24h_pct` 冲突时，以 `trend_1h` 为准。若 `volatility_1h > 25`，决定是否暂停或加大 gap；若 `< 5`，判断是否机会不足。
