@@ -213,16 +213,26 @@ def main():
     reasoning = {
         "long": {
             "existing": existing_long,
+            "target": target_long,
+            "existing_count": len(existing_long),
+            "target_deviation": len(existing_long) - target_long,
             "needed": long_needed,
             "mode": "",
+            "expansion_type": "",
+            "hole_to_current": round(current_price - max(existing_long), 2) if existing_long else None,
             "selected": [],
             "rejected": [],
             "notes": [long_boost_reason] if long_boost_reason else [],
         },
         "short": {
             "existing": existing_short,
+            "target": target_short,
+            "existing_count": len(existing_short),
+            "target_deviation": len(existing_short) - target_short,
             "needed": short_needed,
             "mode": "",
+            "expansion_type": "",
+            "hole_to_current": round(min(existing_short) - current_price, 2) if existing_short else None,
             "selected": [],
             "rejected": [],
             "notes": [short_boost_reason] if short_boost_reason else [],
@@ -240,6 +250,14 @@ def main():
             continue
         chosen_long.append(px)
         reasoning["long"]["selected"].append(round(px, 2))
+        # Determine expansion type for transparency
+        if existing_long:
+            if px > max(existing_long):
+                reasoning["long"]["expansion_type"] = "inner"
+                reasoning["long"]["notes"].append(f"Selected {px} as inner replenish (between current price and max existing {max(existing_long)})")
+            else:
+                reasoning["long"]["expansion_type"] = "outer"
+                reasoning["long"]["notes"].append(f"Selected {px} as outer expansion (below max existing {max(existing_long)}); does not fill gap near current price")
         tp = round(px + tp_offset, 2)
         sl = round(px - sl_offset, 2)
         if tp <= px or sl >= px:
@@ -268,6 +286,14 @@ def main():
             continue
         chosen_short.append(px)
         reasoning["short"]["selected"].append(round(px, 2))
+        # Determine expansion type for transparency
+        if existing_short:
+            if px < min(existing_short):
+                reasoning["short"]["expansion_type"] = "inner"
+                reasoning["short"]["notes"].append(f"Selected {px} as inner replenish (between current price and min existing {min(existing_short)})")
+            else:
+                reasoning["short"]["expansion_type"] = "outer"
+                reasoning["short"]["notes"].append(f"Selected {px} as outer expansion (above min existing {min(existing_short)}); does not fill gap near current price")
         tp = round(px - tp_offset, 2)
         sl = round(px + sl_offset, 2)
         if tp >= px or sl <= px:

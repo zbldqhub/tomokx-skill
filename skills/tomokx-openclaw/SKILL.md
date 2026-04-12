@@ -117,24 +117,34 @@ AI 必须基于以下数据对草案进行**审核、修改或否决**：
 
 `calc_plan.py` 输出的 `reasoning` 字段会解释每侧的价格是如何选出的（内扩/外扩/从零建仓、哪些候选因何被拒绝），AI 应优先阅读该字段以理解草案意图，再进行以下复核：
 
-1. **价格布局是否合理**
-   - `calc_plan.py` 已自动生成**内扩**和**外扩**候选方案，并优先选择离当前价最近的有效位置。
-   - AI 检查：当价格明显 moved inside grid 时，草案是否在内侧生成了补单？若布局仍不符合当前市场结构，AI 可直接修改 `px`。
+### AI 决策权重（优先级从高到低）
+1. **暴露失衡控制** > **网格结构完整性** > **target 数量匹配**
+   - 当 `imbalance_score >= 3` 或单侧总暴露（orders + positions）显著高于另一侧时，**谨慎增加重侧的订单**，即使 boost 触发了补单建议。
+2. **内扩补单优先于外扩**
+   - 内扩（`expansion_type=inner`）填补当前价与最近网格之间的空洞，战术价值高，优先保留。
+   - 外扩（`expansion_type=outer`）只是拉长网格尾巴，若重侧已失衡，**可直接删除**。
+3. **有效覆盖距离**
+   - 理想的 placement 应落在 `current_price ± gap*2` 范围内。超出此范围的外扩单，在 imbalance 场景下价值较低。
 
-2. **gap 是否需要动态调整**
-   - 单侧严重失衡或市场异常时，AI 可增大/减小特定订单的间距。
+### 逐单复核 Checklist
+对 `reasoning` 中每侧的每一单，依次检查：
 
-3. **TP/SL 是否合理**
-   - `volatility_1h` 处于边界值或存在特殊风险时，AI 可调整 `tpTriggerPx` 和 `slTriggerPx`。
+| 检查项 | 通过标准 | 未通过时的处理 |
+|--------|----------|----------------|
+| **内扩还是外扩？** | `expansion_type=inner` 优先 | `outer` 且重侧失衡 → **删除** |
+| **是否加剧 imbalance？** | 重侧（暴露多的一侧）新增订单需谨慎 | imbalance >= 3 且是重侧外扩 → **删除** |
+| **target 偏离度** | `target_deviation <= 0` 最佳 | `target_deviation > 0`（已有订单超过 target）且新增为外扩 → **删除** |
+| **hole 大小** | `hole_to_current` 在 `gap` 到 `gap*2` 之间最理想 | `hole_to_current > gap*3` 说明价格已远离该侧网格，此时外扩意义有限 |
+| **gap 是否需要动态调整** | 单侧严重失衡或市场异常时，AI 可增大/减小特定订单的间距 | 直接修改 `px` |
+| **TP/SL 是否合理** | `volatility_1h` 边界或特殊风险时调整 | 直接修改 `tpTriggerPx` / `slTriggerPx` |
+| **前置验证** | Long: `tp > px`, `sl < px`<br>Short: `tp < px`, `sl > px` | 未通过则修改参数或 **删除** |
+| **总暴露上限** | 补单后 `total <= 20`，per-side <= 4 | 删减订单 |
 
-4. **数量是否正确**
-   - per-side 是否超过 4？总暴露是否会超过 20？剩余容量是否足够？
-   - 若草案计算有误，AI 可直接删减订单。
-
-5. **前置验证（逐单检查）**
-   - Long 单必须 `tpTriggerPx > px` 且 `slTriggerPx < px`
-   - Short 单必须 `tpTriggerPx < px` 且 `slTriggerPx > px`
-   - 未通过验证的订单必须修改参数或删除。
+### 典型场景的默认决策
+- **重侧内扩 + 轻侧内扩** → 两单都保留（结构合理）
+- **重侧外扩 + 轻侧内扩** → 保留轻侧内扩，删除重侧外扩
+- **两侧均为外扩** → 保留更靠近 current_price 的一侧内层单，删除远端外扩；或视 imbalance 决定
+- **calc_recommendation 建议 pause / cancel_only** → 原则上服从；若你判断可以执行，必须在最终决策中**明确说明理由**
 
 AI 修改完成后，将最终计划保存为 `plan.json`（路径 `/tmp/tomokx_plan.json`）。
 
