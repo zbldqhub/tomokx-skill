@@ -200,59 +200,6 @@ def log_trade(summary, gap="", high24h="", low24h="", short_orders="", long_orde
     return f"Logged to {LOG_PATH} and {JSONL_PATH}"
 
 
-# --- Notification helpers ---
-def load_notify_config():
-    config = {}
-    if not os.path.exists(ENV_FILE):
-        return config
-    with open(ENV_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("export "):
-                line = line[7:]
-            if "=" in line:
-                k, v = line.split("=", 1)
-                k = k.strip()
-                v = v.strip().strip('"').strip("'")
-                if k.startswith("NOTIFY_"):
-                    config[k] = v
-    return config
-
-
-def send_qq(msg, qq_api_url):
-    try:
-        payload = json.dumps({"message": msg}).encode("utf-8")
-        req = urllib.request.Request(qq_api_url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return {"ok": True, "status": resp.status}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-def send_webhook(msg, webhook_url):
-    try:
-        payload = json.dumps({"text": msg}).encode("utf-8")
-        req = urllib.request.Request(webhook_url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return {"ok": True, "status": resp.status}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-def send_notify(msg):
-    config = load_notify_config()
-    results = []
-    qq_url = config.get("NOTIFY_QQ_API_URL", "")
-    webhook_url = config.get("NOTIFY_WEBHOOK_URL", "")
-    if qq_url:
-        results.append(send_qq(msg, qq_url))
-    if webhook_url:
-        results.append(send_webhook(msg, webhook_url))
-    return results
-
-
 # --- Main ---
 def main():
     plan_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -271,7 +218,6 @@ def main():
         "execution": {"cancellations": [], "placements": []},
         "stop_counter": {},
         "log": "",
-        "notifications": [],
     }
 
     # 1. Execute orders
@@ -324,15 +270,6 @@ def main():
     log_msg = log_trade(summary)
     result["log"] = log_msg
     print(f"[LOG] {log_msg}")
-
-    # 4. Notify
-    notify_msg = f"📊 ETH Trader 执行完成\n趋势: {summary.get('trend')} | 价格: {summary.get('price')} | 操作: {actions_text}"
-    notify_results = send_notify(notify_msg)
-    result["notifications"] = notify_results
-    if notify_results:
-        print(f"[NOTIFY] sent to {len(notify_results)} channel(s)")
-    else:
-        print("[NOTIFY] no channels configured")
 
     print("\n" + json.dumps(result, indent=2))
 

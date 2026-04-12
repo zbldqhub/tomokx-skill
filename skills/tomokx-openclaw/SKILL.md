@@ -186,10 +186,6 @@ AI 必须基于以下数据对草案进行**审核、修改或否决**：
 
 AI 修改完成后，将最终计划保存为 `plan.json`（路径 `/tmp/tomokx_plan.json`）。
 
-同时，建议在执行前发送一条预执行通知（可选）：
-```bash
-python3 ~/.openclaw/workspace/scripts/notify.py "即将执行交易计划：${summary.actions}"
-```
 ```json
 {
   "cancellations": [

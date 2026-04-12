@@ -111,7 +111,6 @@ def main():
             "stop_written": exec_out.get("stop_counter", {}).get("written"),
             "should_stop": exec_out.get("stop_counter", {}).get("should_stop"),
             "log": exec_out.get("log"),
-            "notifications_sent": len(exec_out.get("notifications", [])),
         })
 
     total_ms = round((time.time() - t0_total) * 1000, 1)
