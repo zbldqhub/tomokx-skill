@@ -190,11 +190,25 @@ def main():
     long_boost_reason = ""
     short_boost_reason = ""
     if existing_long and current_price > max(existing_long) + gap:
-        long_needed = max(long_needed, 1)
-        long_boost_reason = f"Price moved above all long orders (max={max(existing_long)}), boost needed=1"
+        inner_long = [current_price - gap * k for k in range(1, 6) if current_price - gap * k >= max(existing_long) + gap]
+        if inner_long:
+            long_needed = max(long_needed, 1)
+            long_boost_reason = f"Price moved above all long orders (max={max(existing_long)}), inner replenish available, boost needed=1"
+        elif len(existing_long) <= target_long:
+            long_needed = max(long_needed, 1)
+            long_boost_reason = f"Price moved above all long orders (max={max(existing_long)}), no inner candidate but existing_count({len(existing_long)}) <= target({target_long}), outer boost needed=1"
+        else:
+            long_boost_reason = f"Price moved above all long orders (max={max(existing_long)}), but no inner candidate and existing_count({len(existing_long)}) > target({target_long}); skip boost"
     if existing_short and current_price < min(existing_short) - gap:
-        short_needed = max(short_needed, 1)
-        short_boost_reason = f"Price moved below all short orders (min={min(existing_short)}), boost needed=1"
+        inner_short = [current_price + gap * k for k in range(1, 6) if current_price + gap * k <= min(existing_short) - gap]
+        if inner_short:
+            short_needed = max(short_needed, 1)
+            short_boost_reason = f"Price moved below all short orders (min={min(existing_short)}), inner replenish available, boost needed=1"
+        elif len(existing_short) <= target_short:
+            short_needed = max(short_needed, 1)
+            short_boost_reason = f"Price moved below all short orders (min={min(existing_short)}), no inner candidate but existing_count({len(existing_short)}) <= target({target_short}), outer boost needed=1"
+        else:
+            short_boost_reason = f"Price moved below all short orders (min={min(existing_short)}), but no inner candidate and existing_count({len(existing_short)}) > target({target_short}); skip boost"
 
     if long_needed + short_needed > remaining_capacity:
         if trend == "bullish":
