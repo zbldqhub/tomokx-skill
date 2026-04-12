@@ -15,6 +15,7 @@
   - 价格偏离 >100 USDT 自动取消
 - 🔔 **实时通知**: 每次执行后自动发送执行摘要
 - 🖥️ **双平台支持**: Windows 手动版 + Linux/openclaw 定时版
+- 🔗 **系统 Skill 集成**: `tomokx` / `tomokx-openclaw` 已注册为 Agent 系统 Skill，修改自动同步
 
 ## 📦 版本说明
 
@@ -224,6 +225,21 @@ echo 0 > ~/.openclaw/workspace/.trading_stopped
 bash ~/.openclaw/workspace/scripts/env-check.sh
 ```
 
+#### 快速运行脚本（Linux / openclaw）
+```bash
+# 市场分析
+python3 ~/.openclaw/workspace/scripts/run_analyzer.py
+
+# 账单查询
+python3 ~/.openclaw/workspace/scripts/run_bills.py
+
+# 余额查询
+python3 ~/.openclaw/workspace/scripts/run_balance.py
+
+# 下单 / 撤单
+python3 ~/.openclaw/workspace/scripts/run_place.py <place|cancel> [...args]
+```
+
 #### 市场分析
 ```bash
 # Windows
@@ -277,6 +293,12 @@ tomokx-skill/
 │   ├── env-check.sh
 │   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
 │   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
+│   ├── okx_account_balance.py   # 账户余额查询
+│   ├── run_analyzer.py          # 快速运行市场分析
+│   ├── run_balance.py           # 快速运行余额查询
+│   ├── run_bills.py             # 快速运行账单查询
+│   ├── run_get_bills.sh         # 账单查询 shell 脚本
+│   ├── run_place.py             # 下单/撤单执行器
 │   └── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
 ├── HEARTBEAT.md                  # Windows 手动版 heartbeat
 ├── HEARTBEAT-openclaw.md         # openclaw 定时调度 heartbeat
