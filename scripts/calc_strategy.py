@@ -6,23 +6,51 @@ import sys
 from config import base_gap
 
 
-def trend_from_data(change24h_pct, trend_1h):
-    # Prefer 1h trend when they conflict
-    if trend_1h in ("bullish", "bearish", "sideways"):
-        return trend_1h
-    if change24h_pct > 2:
-        return "bullish"
-    elif change24h_pct < -2:
-        return "bearish"
-    return "sideways"
-
-
 def targets(trend):
     if trend == "bullish":
         return 2, 1
     elif trend == "bearish":
         return 1, 2
     return 1, 2
+
+
+def resolve_trend(market):
+    """Use 4h as primary, with alignment and funding bias adjustments."""
+    trend_4h = market.get("trend_4h", "sideways")
+    trend_1h = market.get("trend_1h", "sideways")
+    trend_15m = market.get("trend_15m", "sideways")
+    alignment = market.get("trend_alignment", "weak")
+    funding_bias = market.get("funding_bias", "neutral")
+
+    if trend_4h == trend_1h == trend_15m:
+        alignment = "strong"
+        trend = trend_4h
+    elif trend_4h == trend_1h:
+        alignment = "moderate"
+        trend = trend_4h
+    elif trend_4h == trend_15m:
+        alignment = "mixed"
+        trend = "sideways"
+    else:
+        alignment = "weak"
+        trend = "sideways"
+
+    target_long, target_short = targets(trend)
+
+    if alignment in ("mixed", "weak"):
+        target_long = max(0, target_long - 1)
+        target_short = max(0, target_short - 1)
+
+    if funding_bias == "long_favored" and target_long < 2:
+        target_long = min(2, target_long + 1)
+        if target_short > 0:
+            target_short = max(0, target_short - 1)
+    elif funding_bias == "short_favored" and target_short < 2:
+        target_short = min(2, target_short + 1)
+        if target_long > 0:
+            target_long = max(0, target_long - 1)
+
+    return trend, target_long, target_short, alignment, funding_bias
 
 
 def adjust_targets_for_imbalance(target_long, target_short, exposure):
@@ -52,12 +80,10 @@ def main():
 
     total_i = int(float(total))
     change24h = market.get("change24h_pct", 0)
-    trend_1h = market.get("trend_1h", "sideways")
     vol = market.get("volatility_1h", 0)
     spread = market.get("spread", 0)
 
-    trend = trend_from_data(change24h, trend_1h)
-    target_long, target_short = targets(trend)
+    trend, target_long, target_short, alignment, funding_bias = resolve_trend(market)
     gap = base_gap(total_i)
 
     if vol > 25:
@@ -89,6 +115,8 @@ def main():
         "spread": spread,
         "change24h_pct": change24h,
         "imbalance_score": imbalance,
+        "trend_alignment": alignment,
+        "funding_bias": funding_bias,
     }
     print(json.dumps(result, indent=2))
 

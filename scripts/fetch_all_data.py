@@ -76,16 +76,45 @@ def fetch_public(path):
         return {"error": str(e)}, {"path": path, "elapsed_ms": elapsed_ms, "error": str(e)[:300]}
 
 
+def _calc_trend_from_candles(data, threshold=0.3):
+    if not data or len(data) < 2:
+        return "sideways", 0, 0
+    highs = [float(x[2]) for x in data]
+    lows = [float(x[3]) for x in data]
+    opens = [float(x[1]) for x in data]
+    closes = [float(x[4]) for x in data]
+    recent = closes[-1]
+    past = closes[0] if len(closes) >= len(data) else opens[0]
+    avg_range = sum(h - l for h, l in zip(highs, lows)) / len(data)
+    change_pct = ((recent - past) / past) * 100 if past else 0
+    if change_pct > threshold:
+        trend = "bullish"
+    elif change_pct < -threshold:
+        trend = "bearish"
+    else:
+        trend = "sideways"
+    return trend, round(avg_range, 2), round(change_pct, 2)
+
+
 def fetch_market():
     ticker, ticker_diag = fetch_public("/api/v5/market/ticker?instId=ETH-USDT-SWAP")
-    candle_1h, candle_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=1H&limit=24")
-    if "error" in ticker or "error" in candle_1h:
-        err_parts = []
-        if "error" in ticker:
-            err_parts.append(f"ticker: {ticker['error']}")
-        if "error" in candle_1h:
-            err_parts.append(f"candle: {candle_1h['error']}")
-        return {"error": "; ".join(err_parts)}, {"ticker": ticker_diag, "candle": candle_diag}
+    candle_1h, candle_1h_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=1H&limit=24")
+    candle_4h, candle_4h_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=4H&limit=24")
+    candle_15m, candle_15m_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=15m&limit=48")
+    funding, funding_diag = fetch_public("/api/v5/public/funding-rate?instId=ETH-USDT-SWAP")
+
+    errors = []
+    for name, obj in [("ticker", ticker), ("candle_1h", candle_1h), ("candle_4h", candle_4h), ("candle_15m", candle_15m)]:
+        if isinstance(obj, dict) and "error" in obj:
+            errors.append(f"{name}: {obj['error']}")
+    if errors:
+        return {"error": "; ".join(errors)}, {
+            "ticker": ticker_diag,
+            "candle_1h": candle_1h_diag,
+            "candle_4h": candle_4h_diag,
+            "candle_15m": candle_15m_diag,
+            "funding": funding_diag,
+        }
 
     ticker_data = ticker.get("data", [{}])[0]
     last = float(ticker_data.get("last", 0))
@@ -97,29 +126,37 @@ def fetch_market():
     open24h = float(ticker_data.get("open24h", 0))
     change24h_pct = ((last - open24h) / open24h) * 100 if open24h else 0
 
-    data = candle_1h.get("data", [])
-    if data:
-        highs = [float(x[2]) for x in data]
-        lows = [float(x[3]) for x in data]
-        opens = [float(x[1]) for x in data]
-        closes = [float(x[4]) for x in data]
-        recent = closes[-1]
-        past = closes[0] if len(closes) >= 24 else opens[0]
-        avg_range = sum(h - l for h, l in zip(highs, lows)) / len(data)
-        change_pct = ((recent - past) / past) * 100 if past else 0
-        if change_pct > 0.5:
-            trend = "bullish"
-        elif change_pct < -0.5:
-            trend = "bearish"
-        else:
-            trend = "sideways"
-        stats = {
-            "volatility_1h": round(avg_range, 2),
-            "trend_1h": trend,
-            "recent_change_1h_pct": round(change_pct, 2),
-        }
+    trend_1h, vol_1h, change_1h = _calc_trend_from_candles(candle_1h.get("data", []), threshold=0.5)
+    trend_4h, vol_4h, change_4h = _calc_trend_from_candles(candle_4h.get("data", []), threshold=0.8)
+    trend_15m, vol_15m, change_15m = _calc_trend_from_candles(candle_15m.get("data", []), threshold=0.2)
+
+    # Trend alignment: 4h is primary, 1h confirms, 15m is noise filter
+    if trend_4h == trend_1h == trend_15m:
+        alignment = "strong"
+        primary_trend = trend_4h
+    elif trend_4h == trend_1h:
+        alignment = "moderate"
+        primary_trend = trend_4h
+    elif trend_4h == trend_15m:
+        alignment = "mixed"
+        primary_trend = "sideways"
     else:
-        stats = {"volatility_1h": 0, "trend_1h": "sideways", "recent_change_1h_pct": 0}
+        alignment = "weak"
+        primary_trend = "sideways"
+
+    # Funding rate bias
+    funding_rate = 0.0
+    funding_bias = "neutral"
+    if isinstance(funding, dict) and funding.get("code") == "0":
+        funding_data = funding.get("data", [{}])[0]
+        try:
+            funding_rate = float(funding_data.get("fundingRate", "0") or "0") * 100
+        except (ValueError, TypeError):
+            funding_rate = 0.0
+        if funding_rate > 0.01:
+            funding_bias = "short_favored"
+        elif funding_rate < -0.01:
+            funding_bias = "long_favored"
 
     return {
         "last": last,
@@ -132,8 +169,26 @@ def fetch_market():
         "high24h": float(ticker_data.get("high24h", 0)),
         "low24h": float(ticker_data.get("low24h", 0)),
         "change24h_pct": round(change24h_pct, 2),
-        **stats,
-    }, {"ticker": ticker_diag, "candle": candle_diag}
+        "volatility_1h": vol_1h,
+        "trend_1h": trend_1h,
+        "recent_change_1h_pct": change_1h,
+        "volatility_4h": vol_4h,
+        "trend_4h": trend_4h,
+        "recent_change_4h_pct": change_4h,
+        "volatility_15m": vol_15m,
+        "trend_15m": trend_15m,
+        "recent_change_15m_pct": change_15m,
+        "trend_alignment": alignment,
+        "primary_trend": primary_trend,
+        "funding_rate": round(funding_rate, 4),
+        "funding_bias": funding_bias,
+    }, {
+        "ticker": ticker_diag,
+        "candle_1h": candle_1h_diag,
+        "candle_4h": candle_4h_diag,
+        "candle_15m": candle_15m_diag,
+        "funding": funding_diag,
+    }
 
 
 # --- Inlined risk check (was check_risk.py) ---
@@ -336,19 +391,32 @@ def main():
     if spread > 0.5:
         gap += 1
 
+    primary_trend = market.get("primary_trend", "sideways")
+    trend_alignment = market.get("trend_alignment", "weak")
+    funding_bias = market.get("funding_bias", "neutral")
     change24h = market.get("change24h_pct", 0)
-    trend_1h = market.get("trend_1h", "sideways")
-    if trend_1h in ("bullish", "bearish", "sideways"):
-        trend = trend_1h
-    elif change24h > 2:
-        trend = "bullish"
-    elif change24h < -2:
-        trend = "bearish"
-    else:
-        trend = "sideways"
 
+    # Use primary trend (4h-based with alignment check)
+    trend = primary_trend
+
+    # Reduce exposure when timeframes disagree
     targets = {"bullish": (2, 1), "bearish": (1, 2), "sideways": (1, 2)}
     target_long, target_short = targets.get(trend, (1, 2))
+
+    if trend_alignment in ("mixed", "weak"):
+        # Compress targets when there is disagreement
+        target_long = max(0, target_long - 1)
+        target_short = max(0, target_short - 1)
+
+    # Funding rate bias: nudge target distribution
+    if funding_bias == "long_favored" and target_long < 2:
+        target_long = min(2, target_long + 1)
+        if target_short > 0:
+            target_short = max(0, target_short - 1)
+    elif funding_bias == "short_favored" and target_short < 2:
+        target_short = min(2, target_short + 1)
+        if target_long > 0:
+            target_long = max(0, target_long - 1)
 
     # Imbalance adjustment
     long_total = exposure.get("long_orders", 0) + exposure.get("long_pos_units", 0)
@@ -370,6 +438,8 @@ def main():
         "spread": spread,
         "change24h_pct": change24h,
         "imbalance_score": round(imbalance, 1),
+        "trend_alignment": trend_alignment,
+        "funding_bias": funding_bias,
     }
 
     # Far orders

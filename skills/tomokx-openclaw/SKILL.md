@@ -24,11 +24,28 @@ ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
 
 ### Trend Targets
 
-| 24h Change | Trend    | Long | Short |
-| ---------- | -------- | ---- | ----- |
-| > +2%      | Bullish  | 2    | 1     |
-| < -2%      | Bearish  | 1    | 2     |
-| -2% to +2% | Sideways | 1    | 2     |
+趋势由 **4h 主趋势 + 1h 确认 + 15m 共振** 决定，不再只看 24h 涨跌幅。
+
+| 4h 趋势 | 1h 趋势 | 15m 趋势 | 对齐度 | 最终趋势 | Long | Short |
+|---------|---------|----------|--------|----------|------|-------|
+| bullish | bullish | bullish | strong | Bullish  | 2    | 1     |
+| bearish | bearish | bearish | strong | Bearish  | 1    | 2     |
+| bullish | bullish | 任意    | moderate | Bullish | 2    | 1     |
+| bearish | bearish | 任意    | moderate | Bearish | 1    | 2     |
+| bullish | sideways| bullish | mixed  | Sideways | 1    | 1     |
+| bullish | bearish | bearish | weak   | Sideways | 1    | 1     |
+| 任意     | 任意     | 任意     | mixed/weak | Sideways | 1    | 1     |
+
+**时间框架冲突时的处理**：
+- `strong` / `moderate`：正常执行对应 target
+- `mixed` / `weak`：压缩 target（两侧各 -1），降低暴露，等待方向明确
+
+### Funding Rate 纠偏
+
+`fetch_all_data.py` 同时读取 ETH-USDT-SWAP 的 funding rate：
+- `funding_rate > 0.01%` → `short_favored` → short target +1，long target -1（如有空间）
+- `funding_rate < -0.01%` → `long_favored` → long target +1，short target -1（如有空间）
+- 在 `-0.01% ~ +0.01%` 之间 → `neutral`，不影响 target
 
 ### Dynamic Gap
 
@@ -56,7 +73,10 @@ python3 ~/.openclaw/workspace/scripts/fetch_all_data.py
 ```
 
 **输出顶层字段：**
-- `market`: 行情数据（`last`, `bidPx`, `askPx`, `spread`, `bidSz`, `askSz`, `change24h_pct`, `trend_1h`, `volatility_1h`）
+- `market`: 行情数据（`last`, `bidPx`, `askPx`, `spread`, `bidSz`, `askSz`, `change24h_pct`）
+  - 多时间框架趋势：`trend_4h`, `trend_1h`, `trend_15m`, `trend_alignment`, `primary_trend`
+  - 波动率：`volatility_1h`（下单和 gap 调整主要依据）
+  - 资金费率：`funding_rate`, `funding_bias`
 - `risk`: 风控状态（`should_stop`, `daily_pnl`, `stopped_count`, `sl_count_today`）
 - `orders`: 原始挂单列表
 - `positions`: 持仓列表
@@ -118,20 +138,25 @@ AI 必须基于以下数据对草案进行**审核、修改或否决**：
 `calc_plan.py` 输出的 `reasoning` 字段会解释每侧的价格是如何选出的（内扩/外扩/从零建仓、哪些候选因何被拒绝），AI 应优先阅读该字段以理解草案意图，再进行以下复核：
 
 ### AI 决策权重（优先级从高到低）
-1. **暴露失衡控制** > **网格结构完整性** > **target 数量匹配**
+1. **趋势对齐与 funding 纠偏** > **暴露失衡控制** > **网格结构完整性** > **target 数量匹配**
+   - 当 `trend_alignment` 为 `mixed` 或 `weak` 时，脚本已经自动压缩了 target，AI 应更加谨慎，除非有强烈的内扩机会。
+   - 若 `funding_bias` 与当前 primary_trend 方向相反（如 4h bullish 但 funding 强烈 short_favored），优先服从 funding 信号，减少逆势侧的 target。
+2. **暴露失衡控制**
    - 当 `imbalance_score >= 3` 或单侧总暴露（orders + positions）显著高于另一侧时，**谨慎增加重侧的订单**，即使 boost 触发了补单建议。
-2. **内扩补单优先于外扩**
+3. **内扩补单优先于外扩**
    - 内扩（`expansion_type=inner`）填补当前价与最近网格之间的空洞，战术价值高，优先保留。
-   - 外扩（`expansion_type=outer`）只是拉长网格尾巴，若重侧已失衡，**可直接删除**。
-3. **有效覆盖距离**
-   - 理想的 placement 应落在 `current_price ± gap*2` 范围内。超出此范围的外扩单，在 imbalance 场景下价值较低。
+   - 外扩（`expansion_type=outer`）只是拉长网格尾巴，若重侧已失衡或趋势对齐度弱，**可直接删除**。
+4. **有效覆盖距离**
+   - 理想的 placement 应落在 `current_price ± gap*2` 范围内。超出此范围的外扩单，在 imbalance 或 weak alignment 场景下价值较低。
 
 ### 逐单复核 Checklist
 对 `reasoning` 中每侧的每一单，依次检查：
 
 | 检查项 | 通过标准 | 未通过时的处理 |
 |--------|----------|----------------|
-| **内扩还是外扩？** | `expansion_type=inner` 优先 | `outer` 且重侧失衡 → **删除** |
+| **趋势对齐度** | `trend_alignment` 为 `strong` 或 `moderate` | `mixed`/`weak` 时，重侧外扩 → **删除**；轻侧内扩可保留但需说明理由 |
+| **funding 方向** | 新增订单方向与 `funding_bias` 不严重冲突 | 若 funding 强烈指向另一侧，逆势外扩 → **删除** |
+| **内扩还是外扩？** | `expansion_type=inner` 优先 | `outer` 且重侧失衡或对齐度弱 → **删除** |
 | **是否加剧 imbalance？** | 重侧（暴露多的一侧）新增订单需谨慎 | imbalance >= 3 且是重侧外扩 → **删除** |
 | **target 偏离度** | `target_deviation <= 0` 最佳 | `target_deviation > 0`（已有订单超过 target）且新增为外扩 → **删除** |
 | **hole 大小** | `hole_to_current` 在 `gap` 到 `gap*2` 之间最理想 | `hole_to_current > gap*3` 说明价格已远离该侧网格，此时外扩意义有限 |
