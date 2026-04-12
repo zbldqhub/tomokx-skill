@@ -2,11 +2,13 @@
 """
 Concurrently fetch all pre-trade data in one shot.
 Outputs a unified JSON payload combining market, risk, orders, positions, exposure, strategy, far_orders, and history.
+Includes per-task diagnostics for easier troubleshooting.
 """
 import os
 import sys
 import json
 import math
+import time
 import concurrent.futures
 from datetime import datetime, timezone
 
@@ -33,28 +35,51 @@ def _load_env_override():
 def run_script(name, *args):
     env = _load_env_override()
     cmd = [sys.executable, os.path.join(WORKSPACE, "scripts", name)] + list(args)
+    t0 = time.time()
     r = __import__("subprocess").run(cmd, capture_output=True, text=True, timeout=60, env=env)
+    elapsed_ms = round((time.time() - t0) * 1000, 1)
+    diag = {
+        "script": name,
+        "elapsed_ms": elapsed_ms,
+        "returncode": r.returncode,
+        "stderr_snippet": (r.stderr or "")[:300],
+        "stdout_snippet": (r.stdout or "")[:200],
+    }
     if r.returncode != 0:
-        return {"error": r.stderr or f"{name} failed"}
+        return {"error": r.stderr or f"{name} failed", "_diag": diag}
     try:
-        return json.loads(r.stdout)
+        data = json.loads(r.stdout)
+        if isinstance(data, dict):
+            data["_diag"] = diag
+        return data
     except json.JSONDecodeError:
-        return {"error": f"{name} returned invalid JSON", "raw": r.stdout[:500]}
+        return {"error": f"{name} returned invalid JSON", "raw": r.stdout[:500], "_diag": diag}
 
 
 def fetch_public(path):
     import urllib.request
-    req = urllib.request.Request(BASE + path)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(BASE + path)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            elapsed_ms = round((time.time() - t0) * 1000, 1)
+            return data, {"path": path, "elapsed_ms": elapsed_ms, "error": ""}
+    except Exception as e:
+        elapsed_ms = round((time.time() - t0) * 1000, 1)
+        return {"error": str(e)}, {"path": path, "elapsed_ms": elapsed_ms, "error": str(e)[:300]}
 
 
 def fetch_market():
-    try:
-        ticker = fetch_public("/api/v5/market/ticker?instId=ETH-USDT-SWAP")
-        candle_1h = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=1H&limit=24")
-    except Exception as e:
-        return {"error": str(e)}
+    ticker, ticker_diag = fetch_public("/api/v5/market/ticker?instId=ETH-USDT-SWAP")
+    candle_1h, candle_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=1H&limit=24")
+    if "error" in ticker or "error" in candle_1h:
+        err_parts = []
+        if "error" in ticker:
+            err_parts.append(f"ticker: {ticker['error']}")
+        if "error" in candle_1h:
+            err_parts.append(f"candle: {candle_1h['error']}")
+        return {"error": "; ".join(err_parts)}, {"ticker": ticker_diag, "candle": candle_diag}
 
     ticker_data = ticker.get("data", [{}])[0]
     last = float(ticker_data.get("last", 0))
@@ -102,14 +127,16 @@ def fetch_market():
         "low24h": float(ticker_data.get("low24h", 0)),
         "change24h_pct": round(change24h_pct, 2),
         **stats,
-    }
+    }, {"ticker": ticker_diag, "candle": candle_diag}
 
 
 def main():
     # Step 1: market data (fast public API, run directly)
-    market = fetch_market()
+    market, market_diag = fetch_market()
     if "error" in market:
-        print(json.dumps({"error": f"fetch_market failed: {market['error']}"}))
+        payload = {"error": f"fetch_market failed: {market['error']}", "diagnostics": {"market": market_diag}}
+        print(json.dumps(payload, ensure_ascii=False))
+        sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         sys.exit(1)
 
     # Step 2: concurrent private/authenticated fetches
@@ -127,10 +154,21 @@ def main():
     # Validate critical results
     errors = []
     for name, data in [("check_risk", risk), ("fetch_orders", orders), ("fetch_positions", positions)]:
-        if "error" in data:
+        if isinstance(data, dict) and "error" in data:
             errors.append(f"{name}: {data['error']}")
     if errors:
-        print(json.dumps({"error": "; ".join(errors)}))
+        payload = {
+            "error": "; ".join(errors),
+            "diagnostics": {
+                "market": market_diag,
+                "risk": risk.get("_diag") if isinstance(risk, dict) else None,
+                "orders": orders.get("_diag") if isinstance(orders, dict) else None,
+                "positions": positions.get("_diag") if isinstance(positions, dict) else None,
+                "history": history.get("_diag") if isinstance(history, dict) else None,
+            }
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         sys.exit(1)
 
     # Exposure (write temp files because calc_exposure expects file paths)
@@ -148,7 +186,9 @@ def main():
     except Exception:
         pass
     if "error" in exposure:
-        print(json.dumps({"error": f"calc_exposure failed: {exposure['error']}"}))
+        payload = {"error": f"calc_exposure failed: {exposure['error']}", "diagnostics": {"market": market_diag}}
+        print(json.dumps(payload, ensure_ascii=False))
+        sys.stderr.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         sys.exit(1)
 
     total = exposure.get("total", 0)
@@ -222,6 +262,14 @@ def main():
         "far_orders": {"far_orders": far_orders, "threshold": CANCEL_THRESHOLD, "current_price": current_price},
         "history": history,
         "liquidity_warning": liquidity_warning,
+        "diagnostics": {
+            "market": market_diag,
+            "risk": risk.get("_diag"),
+            "orders": orders.get("_diag"),
+            "positions": positions.get("_diag"),
+            "history": history.get("_diag"),
+            "exposure": exposure.get("_diag"),
+        },
     }
     print(json.dumps(result, indent=2, ensure_ascii=False))
 

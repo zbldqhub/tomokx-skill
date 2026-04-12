@@ -68,6 +68,7 @@ python3 ~/.openclaw/workspace/scripts/fetch_market.py
 > ```bash
 > python3 ~/.openclaw/workspace/scripts/fetch_all_data.py
 > ```
+> 输出 JSON 中额外包含 `diagnostics` 字段，记录每个子任务的耗时与错误摘要，便于排查。若网络不稳定或需要逐行调试，建议切回上面串行方式执行。
 
 ---
 
