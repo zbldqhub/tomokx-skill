@@ -4,18 +4,18 @@
 
 ## 🌟 核心特性
 
-- 🤖 **Agent 原生执行**: 所有交易逻辑由 Agent 逐步执行、分析、决策，非硬编码脚本自动化
+- 🤖 **Agent 决策 + 脚本执行**: AI 负责审核与最终决策，脚本负责数据采集、草案生成和订单执行
 - 📊 **纯开仓双向网格**: 只下开仓单 (`buy+long` / `sell+short`)，平仓完全交给每单自带的 TP/SL
 - 📈 **多时间框架趋势分析**: 结合 1h 和 24h 数据判断趋势
 - 🛡️ **多重风控**: 
-  - 连续止损 3 次自动暂停（有完整执行路径 Step 8.5）
+  - 连续止损 3 次自动暂停
   - 日亏损限制 40 USDT（仅统计 ETH-USDT-SWAP）
   - 最大 20 张总仓位
   - 单侧最多 4 张 live 订单
   - 价格偏离 >100 USDT 自动取消
-- 🔔 **实时通知**: 每次执行后自动发送执行摘要
+- 🧠 **自我学习系统**: 每次决策和每个订单的生命周期都会被记录，支持数据驱动的策略优化
 - 🖥️ **双平台支持**: Windows 手动版 + Linux/openclaw 定时版
-- 🔗 **系统 Skill 集成**: `tomokx` / `tomokx-openclaw` 已注册为 Agent 系统 Skill，修改自动同步
+- 🔗 **系统 Skill 集成**: `tomokx` / `tomokx-openclaw` 已注册为 Agent 系统 Skill
 
 ## 📦 版本说明
 
@@ -24,11 +24,9 @@
 | 版本 | 路径 | 适用场景 | 调度方式 |
 |------|------|---------|----------|
 | **Windows 手动版** | `skills/tomokx/` | 本地 Windows 开发/测试 | 手动触发 |
-| **Linux/openclaw 版** | `skills/tomokx-openclaw/` | 服务器/Linux 定时运行 | openclaw cron / 每 30 分钟 |
+| **Linux/openclaw 版** | `skills/tomokx-openclaw/` | 服务器/Linux 定时运行 | crontab / 每 30 分钟 |
 
 > **注意**: 代理自动切换逻辑（`hysteria-switcher.py`、`proxy-switcher.py`）已被移除，当前版本依赖系统级网络连通性。
->
-> **CLI 1.3.0 适配说明**: `okx account bills` 在 1.3.0 中不再支持 `--type` / `--begin` 等过滤参数，因此使用自定义 `get_bills.py` 直接调用 REST API 获取账单数据。`eth_market_analyzer.py` 也已适配 CLI 1.3.0 的 `--json` 输出格式（raw data）。
 
 ---
 
@@ -41,7 +39,6 @@
 - `okx` CLI 工具 (v1.3.0+)
 - `python` (3.12+)
 - `curl`
-- `node`（用于自动 patch OKX CLI 的 ProxyAgent TLS）
 
 **Linux/openclaw 版:**
 - Linux / macOS / WSL
@@ -66,9 +63,6 @@ cd tomokx-skill
 $workspace = "$env:USERPROFILE\.openclaw\workspace"
 New-Item -ItemType Directory -Force -Path "$workspace\scripts"
 Copy-Item scripts\* "$workspace\scripts\" -Recurse -Force
-
-# 运行环境检查（会自动 patch OKX CLI）
-& "$workspace\scripts\env-check.ps1"
 ```
 
 #### Linux / openclaw 版
@@ -77,9 +71,6 @@ Copy-Item scripts\* "$workspace\scripts\" -Recurse -Force
 # 创建目录并复制脚本
 mkdir -p ~/.openclaw/workspace/scripts
 cp scripts-openclaw/* ~/.openclaw/workspace/scripts/
-
-# 运行环境检查
-bash ~/.openclaw/workspace/scripts/env-check.sh
 ```
 
 ### 3. 配置 API 密钥
@@ -89,7 +80,6 @@ bash ~/.openclaw/workspace/scripts/env-check.sh
 #### Windows
 创建 `C:\Users\<你的用户名>\.openclaw\workspace\.env.trading`：
 ```powershell
-# 用记事本创建，填入你的子账户 API
 notepad "$env:USERPROFILE\.openclaw\workspace\.env.trading"
 ```
 
@@ -101,13 +91,6 @@ cat > ~/.openclaw/workspace/.env.trading << 'EOF'
 export OKX_API_KEY="your-api-key"
 export OKX_SECRET_KEY="your-secret-key"
 export OKX_PASSPHRASE="your-passphrase"
-
-# 交易参数（可选，使用默认值可省略）
-export MAX_ORDERS=20
-export MAX_TOTAL=20
-export ORDER_SIZE=0.1
-export LEVERAGE=10
-export DAILY_LOSS_LIMIT=40
 EOF
 chmod 600 ~/.openclaw/workspace/.env.trading
 ```
@@ -141,38 +124,35 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 | 2 | 7 |
 | 3 | 8 |
 | 4 | 9 |
-| 5 | 10 |
-| 6 | 10 |
+| 5-6 | 10 |
 | 7-10 | 11 |
 | 11-15 | 12 |
 | 16-20 | 14 |
 
 **间隔调整因子:**
-- `volatility_1h` < 8: 可减 1–2（但更密）
+- `volatility_1h` < 8: 可减 1–2
 - `volatility_1h` 8–15: 使用 base gap
 - `volatility_1h` > 15: +2–4
 - `volatility_1h` > 25: 再增或暂停
 
 ### 关键规则
 
-1. **纯开仓网格**：只下 `buy+long`（开多）和 `sell+short`（开空），**禁止**主动下平仓单（`sell+long` / `buy+short`）。平仓由每单自带的 TP/SL 自动处理。
+1. **纯开仓网格**：只下 `buy+long`（开多）和 `sell+short`（开空），**禁止**主动下平仓单。平仓由每单自带的 TP/SL 自动处理。
 2. **单侧上限**：long 侧和 short 侧各自最多 **4 个 live 订单**。
-3. **序列递进**：同一周期内多个新单必须像梯子一样逐级排列，禁止同一周期内出现价格差 < gap 的订单。
-4. **止损计数器**：Step 8.5 会检测平仓/减仓/TP/SL/强平（`subType ∈ {4,6,110,111,112}`）且 `pnl < 0` 的账单，递增 `.trading_stopped`，≥3 时自动暂停交易。
-5. **日亏损**：只统计 `ETH-USDT-SWAP` 平仓类记录（`subType ∈ {4,6,110,111,112}`）的 **pnl 净值**（盈利可冲抵亏损），净值 < -40 USDT 时停止。
+3. **序列递进**：同一周期内多个新单必须像梯子一样逐级排列，禁止价格差 < gap 的订单。
+4. **止损计数器**：检测平仓/减仓/TP/SL/强平（`subType ∈ {4,6,110,111,112}`）且 `pnl < 0` 的账单，≥3 时自动暂停交易。
+5. **日亏损**：只统计 `ETH-USDT-SWAP` 平仓类记录的 **pnl 净值**（盈利可冲抵亏损），净值 < -40 USDT 时停止。
 
 ### 风险控制
 
 | 参数 | 值 | 说明 |
 |-----|---|------|
-| 最大挂单 | 20 | 同时存在的开仓限价单 |
 | 最大总仓位 | 20 | 挂单 + 持仓 |
 | 取消阈值 | 100 USDT | 价格偏离超过此值取消 |
 | 连续止损 | 3 次 | 触发暂停 |
 | 日亏损限制 | 40 USDT | 仅 ETH-USDT-SWAP |
 | 单次下单 | 0.1 张 | 约 2 USDT 保证金 |
 | 杠杆 | 10x | 逐仓模式 |
-| 每周期最大下单 | 5 张 | 防止过度交易 |
 | 单侧最大挂单 | 4 张 | 避免过度延伸 |
 
 ---
@@ -180,19 +160,62 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 ## 🎯 执行流程
 
 ```
-Step 0:  环境设置 → 加载配置
-Step 1:  交易状态检查 → 止损计数 + 日亏损检查
-Step 1.5: 市场快照 → 聚合所有数据
-Step 2:  市场数据分析 → 趋势判断
-Step 3:  检查当前挂单（只计开仓方向）
-Step 4:  检查当前持仓
-Step 5:  计算总仓位（remaining_capacity = floor(20 - total)）
-Step 6:  取消远离订单（>100 USDT）
-Step 7:  确定目标分布
-Step 8:  管理订单 → 开新单/补单（纯开仓 + 序列递进）
-Step 8.5: 更新止损计数器
-Step 9:  计算 TP/SL
-Step 10: 日志记录 + 通知
+Step 1+2: 并发数据采集 → 市场/订单/持仓/风险/历史一次性拉取
+Step 3a:  AI 决策参考  → calc_recommendation.py 提供量化建议
+Step 3b:  生成交易草案 → calc_plan.py 基于策略生成 placements + reasoning
+Step 3c:  AI 审核决策  → 阅读 reasoning，修改或否决草案
+Step 4:   执行交易计划 → execute_and_finalize.py 统一执行撤单/下单/日志/学习记录
+```
+
+---
+
+## 🧠 自我学习与策略优化
+
+系统内置了两层学习机制，帮助持续优化策略参数。
+
+### 决策日志 (`decisions.jsonl`)
+
+每次执行后自动记录：
+- 市场状态（趋势、价格、波动率）
+- 策略参数（gap、target_long、target_short）
+- 实际动作（撤销/新建数量、expansion_type）
+- 决策时刻 baseline_pnl 与后续 outcome_pnl delta
+
+### 订单生命周期跟踪 (`order_tracking.jsonl`)
+
+每个成功下单都会记录 ordId、价格、TP/SL、expansion_type、placed_at 等。
+
+### 分析工具
+
+每周运行一次，评估策略效果：
+
+```bash
+# 粗粒度：决策级盈亏归因
+python3 ~/.openclaw/workspace/scripts/analyze_decisions.py
+
+# 细粒度：订单级真实盈亏与胜率
+python3 ~/.openclaw/workspace/scripts/analyze_trades.py
+```
+
+**示例输出**：
+```json
+{
+  "top_setups": [
+    {
+      "trend": "bullish",
+      "gap": "14",
+      "expansion_type": "inner",
+      "posSide": "short",
+      "count": 5,
+      "avg_pnl": 0.92,
+      "win_rate": 0.8
+    }
+  ],
+  "recommendations": [
+    "Best setup: short inner in bullish with gap=14 -> avg_pnl=0.92 win_rate=0.8 (n=5)",
+    "Worst setup: long outer in bullish with gap=14 -> avg_pnl=-0.34 win_rate=0.25 (n=4); consider avoiding"
+  ]
+}
 ```
 
 ---
@@ -216,55 +239,15 @@ Step 10: 日志记录 + 通知
 echo 0 > ~/.openclaw/workspace/.trading_stopped
 ```
 
-#### 环境检查
+#### 快速运行完整交易循环（Linux / openclaw）
 ```bash
-# Windows PowerShell
-& "$env:USERPROFILE\.openclaw\workspace\scripts\env-check.ps1"
-
-# Linux
-bash ~/.openclaw/workspace/scripts/env-check.sh
+python3 ~/.openclaw/workspace/scripts/run_trade_cycle.py
 ```
 
-#### 快速运行脚本（Linux / openclaw）
+#### 分析历史表现
 ```bash
-# 市场分析
-python3 ~/.openclaw/workspace/scripts/run_analyzer.py
-
-# 账单查询
-python3 ~/.openclaw/workspace/scripts/run_bills.py
-
-# 余额查询
-python3 ~/.openclaw/workspace/scripts/run_balance.py
-
-# 下单 / 撤单
-python3 ~/.openclaw/workspace/scripts/run_place.py <place|cancel> [...args]
-```
-
-#### 市场分析
-```bash
-# Windows
-python C:\Users\<username>\.openclaw\workspace\scripts\eth_market_analyzer.py
-
-# Linux
-python3 ~/.openclaw/workspace/scripts/eth_market_analyzer.py
-```
-
-#### 账单查询（日亏损 / 止损检查）
-```bash
-# Windows
-python C:\Users\<username>\.openclaw\workspace\scripts\get_bills.py --today
-
-# Linux
-python3 ~/.openclaw/workspace/scripts/get_bills.py --today
-```
-
-#### 交易周期诊断（只检查不下单）
-```bash
-# Windows
-python C:\Users\<username>\.openclaw\workspace\scripts\trade_cycle_check.py
-
-# Linux
-python3 ~/.openclaw/workspace/scripts/trade_cycle_check.py
+python3 ~/.openclaw/workspace/scripts/analyze_decisions.py
+python3 ~/.openclaw/workspace/scripts/analyze_trades.py
 ```
 
 ---
@@ -279,56 +262,47 @@ tomokx-skill/
 │   └── tomokx-openclaw/         # Linux / openclaw 定时版
 │       └── SKILL.md
 ├── scripts/                      # Windows 配套脚本
-│   ├── eth-trader-run.sh
-│   ├── env-check.sh
-│   ├── env-check.ps1
-│   ├── analyze_history.py       # 分析近期历史盈亏（供 AI 优化决策）
-│   ├── analyze_history.py       # 分析近期历史盈亏（供 AI 优化决策）
-│   ├── calc_exposure.py         # 计算总暴露/剩余容量
-│   ├── calc_plan.py             # 根据策略生成具体下单计划
-│   ├── calc_strategy.py         # 计算趋势/目标分布/gap建议
-│   ├── check_risk.py            # 检查停止计数器和日亏损
-│   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
-│   ├── execute_orders.py        # 批量下单/撤单执行器
-│   ├── fetch_market.py          # 获取市场行情
+│   ├── config.py                # 统一配置 + 策略常量
+│   ├── fetch_all_data.py        # 并发数据采集 (Step 1+2)
+│   ├── calc_recommendation.py   # AI 决策参考 (Step 3a)
+│   ├── calc_plan.py             # 交易草案生成 (Step 3b)
+│   ├── calc_strategy.py         # 策略参数计算
+│   ├── execute_and_finalize.py  # 统一执行 + 日志 + 学习记录 (Step 4)
+│   ├── analyze_history.py       # 近期历史盈亏分析
+│   ├── analyze_decisions.py     # 决策日志分析器
+│   ├── analyze_trades.py        # 订单生命周期分析器
 │   ├── fetch_orders.py          # 获取挂单
 │   ├── fetch_positions.py       # 获取持仓
 │   ├── filter_far_orders.py     # 筛选远离订单
-│   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
-   ├── log_trade.py             # 交易日志自动写入
-│   ├── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
-│   ├── update_stop_counter.py   # 更新止损计数器
-│   ├── patch-okx-cli.js         # 修复 OKX CLI ProxyAgent TLS
-│   ├── hysteria-switcher.py     # (已停用)
-│   └── proxy-switcher.py        # (已停用)
+│   └── run_trade_cycle.py       # 完整交易循环入口
 ├── scripts-openclaw/             # Linux 配套脚本
-│   ├── eth-trader-run.sh
-│   ├── env-check.sh
-│   ├── calc_exposure.py         # 计算总暴露/剩余容量
-│   ├── calc_strategy.py         # 计算趋势/目标分布/gap建议
-│   ├── check_risk.py            # 检查停止计数器和日亏损
-│   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
-│   ├── execute_orders.py        # 批量下单/撤单执行器
-│   ├── fetch_market.py          # 获取市场行情
-│   ├── fetch_orders.py          # 获取挂单
-│   ├── fetch_positions.py       # 获取持仓
-│   ├── filter_far_orders.py     # 筛选远离订单
-│   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
-│   ├── log_trade.py             # 交易日志自动写入
-│   ├── okx_account_balance.py   # 账户余额查询
-│   ├── run_analyzer.py          # 快速运行市场分析
-│   ├── run_balance.py           # 快速运行余额查询
-│   ├── run_bills.py             # 快速运行账单查询
-│   ├── run_get_bills.sh         # 账单查询 shell 脚本
-│   ├── run_place.py             # 下单/撤单执行器
-│   ├── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
-│   └── update_stop_counter.py   # 更新止损计数器
+│   └── (与 scripts/ 对应，适配 Linux/openclaw 环境)
+├── run_trade_cycle.py            # 顶层入口（调用 skills/ 逻辑）
 ├── HEARTBEAT.md                  # Windows 手动版 heartbeat
 ├── HEARTBEAT-openclaw.md         # openclaw 定时调度 heartbeat
 ├── .gitignore                    # 已排除 .env.trading 等敏感文件
 ├── README.md                     # 本文件
+├── CHANGELOG.md                  # 更新日志
 └── LICENSE
 ```
+
+---
+
+## 📝 近期更新
+
+### v2.1.0 (2026-04-12)
+- **新增自我学习系统**: `decisions.jsonl` + `order_tracking.jsonl` + `analyze_decisions.py` + `analyze_trades.py`
+- **增强 calc_plan.py reasoning**: 新增 `expansion_type`（内扩/外扩）、`target_deviation`、`hole_to_current` 等字段
+- **完善 AI 决策框架**: SKILL.md 增加结构化决策权重和逐单复核 Checklist
+- **优化 boost 逻辑**: 仅在内扩候选存在或 under-target 时才触发，避免生成无意义的重侧外扩单
+- **统一执行入口**: `execute_and_finalize.py` 取代原来的 `execute_orders.py` + `update_stop_counter.py` + `log_trade.py`
+- **并发数据采集**: `fetch_all_data.py` 一次性并发拉取 Step 1+2 的所有数据
+
+### v2.0.0 (2026-04)
+- **重大架构重构**: 从 20+ 个零散脚本精简为 11 个核心脚本
+- **删除历史脚本**: `trade_cycle_check.py`、`eth_market_analyzer.py`、`run_*.py`、`hysteria-switcher.py`、`proxy-switcher.py` 等
+- **新增 AI 决策支持**: `calc_recommendation.py` 提供 proceed/pause/reduce_exposure 建议
+- **修复 Windows 编码问题**: `calc_recommendation.py` 和 `calc_plan.py` 强制 UTF-8 输出
 
 ---
 
@@ -345,15 +319,6 @@ tomokx-skill/
 ---
 
 ## 🔧 故障排除
-
-### OKX CLI 连接失败（Windows + 代理）
-
-如果你通过 Clash/V2Ray 等本地 HTTP 代理上网，OKX CLI 可能需要 patch：
-
-```powershell
-# 自动 patch
-node "$env:USERPROFILE\.openclaw\workspace\scripts\patch-okx-cli.js"
-```
 
 ### 交易暂停
 

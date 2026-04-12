@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (tomokx-skill)
+
+- **Learning & Optimization System**:
+  - `decisions.jsonl`: decision-level log with baseline_pnl and outcome_pnl delta
+  - `order_tracking.jsonl`: per-order lifecycle tracking (ordId, px, TP/SL, expansion_type, placed_at)
+  - `analyze_decisions.py`: aggregates decision outcomes by trend/gap/target/expansion_type
+  - `analyze_trades.py`: matches order_tracking against OKX bills to compute per-order PnL, hold time, and win rate
+- **Enhanced AI Decision Support**:
+  - `calc_recommendation.py`: quantitative recommendation with suggested_targets and risk_flags
+  - `calc_plan.py` enriched `reasoning`: added `expansion_type`, `target_deviation`, `hole_to_current`, and explicit inner/outer classification
+  - SKILL.md: structured AI decision checklist with imbalance control > grid integrity priority
+- **Unified Execution Pipeline**:
+  - `fetch_all_data.py`: concurrent one-shot data fetch for Step 1+2
+  - `execute_and_finalize.py`: single entry for cancellations, placements, stop-counter update, logging, and learning records
+- **New Top-Level Entry**: `run_trade_cycle.py` orchestrates the full trading cycle
+
+### Changed (tomokx-skill)
+
+- **Boost logic refined**: `calc_plan.py` only boosts when inner replenish candidates exist or the side is under-target, preventing meaningless outer-expansion orders on overweight sides
+- **Count calculation fixed**: `long_orders_count` / `short_orders_count` now use `len(existing)` after far-order filtering instead of raw exposure numbers
+- **instId fallback**: `get_existing_prices()` treats missing `instId` as `ETH-USDT-SWAP` to prevent silent failures with manual test data
+
+### Removed (tomokx-skill)
+
+- Historical fragmented scripts: `trade_cycle_check.py`, `eth_market_analyzer.py`, `run_*.py`, `hysteria-switcher.py`, `proxy-switcher.py`, `okx_account_balance.py`, `get_bills.py`, `calc_exposure.py`, `check_risk.py`, `execute_orders.py`, `update_stop_counter.py`, `log_trade.py`
+
 ---
 
 ## [1.3.0] - 2026-04-08
