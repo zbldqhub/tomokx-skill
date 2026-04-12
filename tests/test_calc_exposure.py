@@ -4,7 +4,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts-openclaw"))
-from calc_exposure import classify_orders, classify_positions
+from config import classify_orders, classify_positions
 
 
 def test_classify_orders():

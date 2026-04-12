@@ -48,83 +48,32 @@ ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
 
 ---
 
-# Step 1 · 行情数据采集
+# Step 1~2 · 数据采集
 
-调用 `fetch_market.py` 获取 ETH-USDT-SWAP 市场行情：
+统一调用 `fetch_all_data.py` 一次性并发拉取 Step 1~2 的所有数据：
 ```bash
-python3 ~/.openclaw/workspace/scripts/fetch_market.py
+python3 ~/.openclaw/workspace/scripts/fetch_all_data.py
 ```
 
-**输出字段：**
-- `last`: 当前价格
-- `bidPx` / `askPx`: 买一/卖一价
-- `spread`: 买卖价差（askPx - bidPx）
-- `bidSz` / `askSz`: 买一/卖一挂单量（用于判断流动性）
-- `change24h_pct`: 24h 涨跌幅
-- `trend_1h`: 1h 趋势（bullish / bearish / sideways）
-- `volatility_1h`: 1h 波动率
+**输出顶层字段：**
+- `market`: 行情数据（`last`, `bidPx`, `askPx`, `spread`, `bidSz`, `askSz`, `change24h_pct`, `trend_1h`, `volatility_1h`）
+- `risk`: 风控状态（`should_stop`, `daily_pnl`, `stopped_count`, `sl_count_today`）
+- `orders`: 原始挂单列表
+- `positions`: 持仓列表
+- `exposure`: 汇总暴露（`total`, `remaining_capacity`, `short_orders`, `long_orders` 等）
+- `strategy`: 策略建议（`trend`, `target_long`, `target_short`, `adjusted_gap`, `imbalance_score`）
+- `far_orders`: 远离订单列表（偏离 >100 USDT）
+- `history`: 近期历史盈亏分析
+- `diagnostics`: 各子任务耗时与错误摘要，便于排查
 
-> **并发采集（可选）**：也可以直接调用 `fetch_all_data.py` 一次性并发拉取 Step 1~2 的所有数据：
-> ```bash
-> python3 ~/.openclaw/workspace/scripts/fetch_all_data.py
-> ```
-> 输出 JSON 中额外包含 `diagnostics` 字段，记录每个子任务的耗时与错误摘要，便于排查。若网络不稳定或需要逐行调试，建议切回上面串行方式执行。
+> **失败处理**：若 `fetch_all_data.py` 输出包含 `error`，AI 应先查看 `diagnostics` 定位失败子任务，再**整体重跑一次**（最多 2 次，间隔 2 秒）。若仍失败，本次跳过并通知用户具体异常。
 
----
-
-# Step 2 · 风险与仓位数据采集
-
-调用 `check_risk.py` 获取风控状态：
-```bash
-python3 ~/.openclaw/workspace/scripts/check_risk.py
-```
-**输出字段：** `stopped_count`、`daily_pnl`、`sl_count_today`。  
-**硬规则**：若 `stopped_count >= 3` 或 `daily_pnl < -40`，立即停止并通知用户。
-
-调用 `fetch_orders.py` 和 `fetch_positions.py` 获取原始挂单与持仓：
-```bash
-python3 ~/.openclaw/workspace/scripts/fetch_orders.py
-python3 ~/.openclaw/workspace/scripts/fetch_positions.py
-```
-
-调用 `calc_exposure.py` 计算汇总数据：
-```bash
-python3 ~/.openclaw/workspace/scripts/calc_exposure.py <orders.json> <positions.json>
-```
-**输出字段：** `short_orders`、`long_orders`、`orders_count`、`positions_count`、`total`、`remaining_capacity`。
-
-调用 `calc_strategy.py` 计算策略建议：
-```bash
-python3 ~/.openclaw/workspace/scripts/calc_strategy.py <market.json> <total>
-```
-**输出字段：** `trend`、`target_long`、`target_short`、`adjusted_gap`。
-
-调用 `filter_far_orders.py` 筛选远离订单：
-```bash
-python3 ~/.openclaw/workspace/scripts/filter_far_orders.py <orders.json> <last_price>
-```
-**输出字段：** `far_orders`（偏离 >100 USDT 的订单列表）。
-
-调用 `analyze_history.py` 分析近期历史盈亏：
-```bash
-python3 ~/.openclaw/workspace/scripts/analyze_history.py
-```
-**输出字段：**
-- `total_pnl_7d` / `total_pnl_30d`: 近 7/30 天总盈亏
-- `win_days_7d` / `loss_days_7d`: 近 7 天盈利/亏损天数
-- `win_rate_7d`: 近 7 天胜率
-- `avg_daily_pnl_7d`: 近 7 天日均盈亏
-- `max_daily_loss_7d`: 近 7 天最大单日亏损
-- `max_drawdown_7d`: 近 7 天最大回撤
-- `profit_factor`: 盈亏比（总盈利/总亏损绝对值）
-- `sharpe_like_7d`: 简化夏普（日均收益 / 日收益标准差）
-- `trend_performance_7d`: 不同趋势下的盈亏表现
-- `imbalance_analysis`: 单侧失衡 vs 均衡的盈亏对比
-- `gap_performance`: 大 gap vs 小 gap 的盈亏对比
-- `entry_timing`: 低位/高位入场盈亏对比
-- `recommendation`: 策略优化建议
-
-> **脚本失败处理**：若 Step 1~2 中任一脚本输出包含 `error` 或执行超时，AI 应先尝试**重跑一次该脚本**（最多 2 次，间隔 2 秒）。若仍失败，本次跳过并通知用户具体异常。
+### 独立脚本参考（调试时可选）
+- `fetch_market.py`：仅获取市场行情
+- `fetch_orders.py` / `fetch_positions.py`：分别获取挂单/持仓
+- `filter_far_orders.py <orders.json> <last_price>`：筛选远单
+- `analyze_history.py`：分析历史盈亏
+- `calc_strategy.py <market.json> <total> [exposure.json]`：单独计算策略建议
 
 ---
 

@@ -60,7 +60,7 @@ def test_main_json():
         script = os.path.join(os.path.dirname(__file__), "..", "scripts-openclaw", "calc_recommendation.py")
         r = subprocess.run(
             [sys.executable, script, paths["market"], paths["exposure"], paths["strategy"], paths["history"]],
-            capture_output=True, text=True
+            capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         assert r.returncode == 0, r.stderr
         result = json.loads(r.stdout)

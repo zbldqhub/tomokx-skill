@@ -86,6 +86,39 @@ PASSPHRASE = os.environ.get("OKX_PASSPHRASE", "")
 BASE_URL = os.environ.get("OKX_BASE_URL", "https://www.okx.com")
 
 
+def classify_orders(orders_list):
+    short, long = 0, 0
+    for o in orders_list:
+        if o.get("instId") != "ETH-USDT-SWAP" or o.get("state") != "live":
+            continue
+        if o.get("ordType") != "limit":
+            continue
+        side = o.get("side")
+        pos_side = o.get("posSide")
+        if side == "sell" and pos_side == "short":
+            short += 1
+        elif side == "buy" and pos_side == "long":
+            long += 1
+    return short, long
+
+
+def classify_positions(positions_list):
+    short_pos, long_pos = 0.0, 0.0
+    for p in positions_list:
+        if p.get("instId") != "ETH-USDT-SWAP":
+            continue
+        if str(p.get("lever")) != str(LEVERAGE):
+            continue
+        if p.get("mgnMode") != "isolated":
+            continue
+        sz = float(p.get("pos", "0") or "0")
+        if p.get("posSide") == "short":
+            short_pos += sz
+        elif p.get("posSide") == "long":
+            long_pos += sz
+    return short_pos, long_pos
+
+
 def ensure_api_ready():
     if not API_KEY or not SECRET or not PASSPHRASE:
         print("{" + '"error": "Missing API credentials in ' + ENV_FILE.replace("\\", "/") + '"' + "}")
