@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Update stop-loss counter for Windows tomokx skill.
+Update stop-loss counter for openclaw (Linux).
 Counts today's losing closes from bills and writes to .trading_stopped.
 """
 import os
@@ -9,14 +9,14 @@ import json
 import subprocess
 from datetime import datetime, timezone
 
-WORKSPACE = os.path.expanduser(r"~\.openclaw\workspace")
-ENV_FILE = os.path.join(WORKSPACE, ".env.trading")
-STOP_FILE = os.path.join(WORKSPACE, ".trading_stopped")
+from config import WORKSPACE, STOP_FILE
 
-def load_env():
+
+def run_bills():
     env = os.environ.copy()
-    if os.path.exists(ENV_FILE):
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
+    env_path = os.path.join(WORKSPACE, ".env.trading")
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("export "):
@@ -25,11 +25,6 @@ def load_env():
                     k, v = line.split("=", 1)
                     v = v.strip().strip('"').strip("'")
                     env[k] = v
-    return env
-
-
-def run_bills():
-    env = load_env()
     cmd = [sys.executable, os.path.join(WORKSPACE, "scripts", "get_bills.py"), "--today"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
     if r.returncode != 0:

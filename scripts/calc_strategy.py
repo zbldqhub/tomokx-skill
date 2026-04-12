@@ -3,6 +3,8 @@
 import json
 import sys
 
+from config import base_gap
+
 
 def trend_from_data(change24h_pct, trend_1h):
     # Prefer 1h trend when they conflict
@@ -21,27 +23,6 @@ def targets(trend):
     elif trend == "bearish":
         return 1, 2
     return 1, 2
-
-
-def base_gap(total):
-    if total <= 0:
-        return 5
-    elif total == 1:
-        return 6
-    elif total == 2:
-        return 7
-    elif total == 3:
-        return 8
-    elif total == 4:
-        return 9
-    elif total <= 6:
-        return 10
-    elif total <= 10:
-        return 11
-    elif total <= 15:
-        return 12
-    else:
-        return 14
 
 
 def main():

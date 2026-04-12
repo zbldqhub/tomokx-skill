@@ -59,9 +59,15 @@ python3 ~/.openclaw/workspace/scripts/fetch_market.py
 - `last`: 当前价格
 - `bidPx` / `askPx`: 买一/卖一价
 - `spread`: 买卖价差（askPx - bidPx）
+- `bidSz` / `askSz`: 买一/卖一挂单量（用于判断流动性）
 - `change24h_pct`: 24h 涨跌幅
 - `trend_1h`: 1h 趋势（bullish / bearish / sideways）
 - `volatility_1h`: 1h 波动率
+
+> **并发采集（可选）**：也可以直接调用 `fetch_all_data.py` 一次性并发拉取 Step 1~2 的所有数据：
+> ```bash
+> python3 ~/.openclaw/workspace/scripts/fetch_all_data.py
+> ```
 
 ---
 
@@ -107,7 +113,11 @@ python3 ~/.openclaw/workspace/scripts/analyze_history.py
 - `win_days_7d` / `loss_days_7d`: 近 7 天盈利/亏损天数
 - `avg_daily_pnl_7d`: 近 7 天日均盈亏
 - `max_daily_loss_7d`: 近 7 天最大单日亏损
+- `max_drawdown_7d`: 近 7 天最大回撤
 - `trend_performance_7d`: 不同趋势下的盈亏表现
+- `imbalance_analysis`: 单侧失衡 vs 均衡的盈亏对比
+- `gap_performance`: 大 gap vs 小 gap 的盈亏对比
+- `entry_timing`: 低位/高位入场盈亏对比
 - `recommendation`: 策略优化建议
 
 > **脚本失败处理**：若 Step 1~2 中任一脚本输出包含 `error` 或执行超时，AI 应先尝试**重跑一次该脚本**（最多 2 次，间隔 2 秒）。若仍失败，本次跳过并通知用户具体异常。
@@ -119,6 +129,7 @@ python3 ~/.openclaw/workspace/scripts/analyze_history.py
 基于以上数据，你作为交易 AI 需要推理：
 
 1. **趋势确认**：优先采用 `trend_1h`。当 `trend_1h` 与 `change24h_pct` 冲突时，以 `trend_1h` 为准。若 `volatility_1h > 25`，决定是否暂停或加大 gap；若 `< 5`，判断是否机会不足。
+1.5. **流动性检查**：若 `spread > 2` 且 `bidSz < 10` 与 `askSz < 10` 同时成立，说明流动性枯竭，应直接暂停交易并通知用户。
 2. **目标与失衡**：当前挂单/持仓分布是否与 `target_long` / `target_short` 匹配？是否存在单侧严重失衡需要优先补单？
 3. **异常判断**：是否存在价格跳空、spread > 2 USDT 等市场异常？是否应整体重建网格而非简单补单？
 4. **撤单决策**：`far_orders` 中偏离 >100 USDT 的订单，原则上全部撤销。
@@ -152,7 +163,12 @@ AI 必须基于以下数据对草案进行**审核、修改或否决**：
    - Short 单必须 `tpTriggerPx < px` 且 `slTriggerPx > px`
    - 未通过验证的订单必须修改参数或删除。
 
-AI 修改完成后，将最终计划保存为 `plan.json`（路径 `/tmp/tomokx_plan.json`）：
+AI 修改完成后，将最终计划保存为 `plan.json`（路径 `/tmp/tomokx_plan.json`）。
+
+同时，建议在执行前发送一条预执行通知（可选）：
+```bash
+python3 ~/.openclaw/workspace/scripts/notify.py "即将执行交易计划：${summary.actions}"
+```
 ```json
 {
   "cancellations": [
@@ -213,11 +229,9 @@ python3 ~/.openclaw/workspace/scripts/log_trade.py \
   --actions "<actions>"
 ```
 
-最后通知用户执行摘要：
-```
-📊 ETH Trader 执行完成
-趋势: <trend> | 价格: <price> | 挂单: <orders>/20 | 持仓: <positions> | 总暴露: <total>/20
-操作: <actions>
+最后通知用户执行摘要（并发送通知）：
+```bash
+python3 ~/.openclaw/workspace/scripts/notify.py "📊 ETH Trader 执行完成\n趋势: <trend> | 价格: <price> | 挂单: <orders>/20 | 持仓: <positions> | 总暴露: <total>/20\n操作: <actions>"
 ```
 
 ---

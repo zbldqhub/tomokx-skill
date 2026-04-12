@@ -3,6 +3,8 @@
 import json
 import sys
 
+from config import CANCEL_THRESHOLD
+
 
 def main():
     orders_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -22,7 +24,7 @@ def main():
         if o.get("instId") != "ETH-USDT-SWAP" or o.get("state") != "live":
             continue
         px = float(o.get("px", "0") or "0")
-        if abs(px - price) > 100:
+        if abs(px - price) > CANCEL_THRESHOLD:
             far_orders.append({
                 "instId": "ETH-USDT-SWAP",
                 "ordId": o.get("ordId"),
@@ -31,7 +33,7 @@ def main():
                 "posSide": o.get("posSide"),
             })
 
-    print(json.dumps({"far_orders": far_orders, "threshold": 100, "current_price": price}, indent=2))
+    print(json.dumps({"far_orders": far_orders, "threshold": CANCEL_THRESHOLD, "current_price": price}, indent=2))
 
 
 if __name__ == "__main__":

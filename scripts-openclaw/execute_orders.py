@@ -7,20 +7,21 @@ import subprocess
 import os
 import sys
 import json
+import time
 
-ENV_FILE = '/root/.openclaw/workspace/.env.trading'
+from config import ENV_FILE
 
 
 def load_env():
     env = os.environ.copy()
     if os.path.exists(ENV_FILE):
-        with open(ENV_FILE) as f:
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line.startswith('export '):
+                if line.startswith("export "):
                     line = line[7:]
-                if '=' in line and not line.startswith('#'):
-                    k, v = line.split('=', 1)
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
                     v = v.strip().strip('"').strip("'")
                     env[k] = v
     return env
@@ -29,7 +30,7 @@ def load_env():
 def run_cmd(cmd_list, env):
     cmd_str = " ".join(cmd_list)
     full = f"source {ENV_FILE} && " + cmd_str
-    r = subprocess.run(["bash", "-c", full], env=env, capture_output=True, text=True, timeout=20)
+    r = subprocess.run(["bash", "-c", full], env=env, capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace")
     return r.stdout or r.stderr or ""
 
 
@@ -93,6 +94,12 @@ def main():
         out = place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
         results["placements"].append({"px": px, "side": side, "posSide": pos_side, "result": out})
         print(f"[PLACE] {side}+{pos_side} @ {px} TP={tp} SL={sl} -> {out}")
+        if "429" in out or "rate limit" in out.lower():
+            print("[WARN] Rate limit detected, waiting 10s...")
+            time.sleep(10)
+            out = place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
+            results["placements"][-1]["retry_result"] = out
+            print(f"[RETRY] {side}+{pos_side} @ {px} -> {out}")
 
     print("\n" + json.dumps(results, indent=2))
 

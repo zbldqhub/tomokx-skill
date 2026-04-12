@@ -4,6 +4,8 @@ import json
 import sys
 import math
 
+from config import MAX_TOTAL, ORDER_SIZE, LEVERAGE
+
 
 def classify_orders(orders):
     short, long = 0, 0
@@ -26,7 +28,7 @@ def classify_positions(positions):
     for p in positions:
         if p.get("instId") != "ETH-USDT-SWAP":
             continue
-        if str(p.get("lever")) != "10":
+        if str(p.get("lever")) != str(LEVERAGE):
             continue
         if p.get("mgnMode") != "isolated":
             continue
@@ -57,12 +59,12 @@ def main():
     short_orders, long_orders = classify_orders(orders_list)
     short_pos, long_pos = classify_positions(positions_list)
 
-    short_pos_units = round(short_pos / 0.1, 1)
-    long_pos_units = round(long_pos / 0.1, 1)
+    short_pos_units = round(short_pos / ORDER_SIZE, 1)
+    long_pos_units = round(long_pos / ORDER_SIZE, 1)
     orders_count = short_orders + long_orders
     positions_count = round(short_pos_units + long_pos_units, 1)
     total = round(orders_count + positions_count, 1)
-    remaining = math.floor(20 - total)
+    remaining = math.floor(MAX_TOTAL - total)
 
     result = {
         "short_orders": short_orders,

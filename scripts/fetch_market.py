@@ -51,6 +51,8 @@ def main():
     bid_px = float(ticker_data.get("bidPx", last))
     ask_px = float(ticker_data.get("askPx", last))
     spread = round(ask_px - bid_px, 2)
+    bid_sz = float(ticker_data.get("bidSz", 0))
+    ask_sz = float(ticker_data.get("askSz", 0))
     open24h = float(ticker_data.get("open24h", 0))
     change24h_pct = ((last - open24h) / open24h) * 100 if open24h else 0
     stats = analyze_1h(candle_1h)
@@ -61,6 +63,8 @@ def main():
         "bidPx": bid_px,
         "askPx": ask_px,
         "spread": spread,
+        "bidSz": bid_sz,
+        "askSz": ask_sz,
         "open24h": open24h,
         "high24h": float(ticker_data.get("high24h", 0)),
         "low24h": float(ticker_data.get("low24h", 0)),

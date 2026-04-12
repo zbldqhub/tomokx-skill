@@ -1,37 +1,12 @@
 #!/usr/bin/env python3
 """Simple helper to fetch OKX bills for today."""
-import os
 import sys
 import json
-import base64
-import hmac
-import hashlib
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-def _load_env_file():
-    env_path = os.path.expanduser("~/.openclaw/workspace/.env.trading")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("export "):
-                    line = line[7:]
-                if "=" in line:
-                    key, val = line.split("=", 1)
-                    key = key.strip()
-                    val = val.strip().strip('"').strip("'")
-                    if key not in os.environ:
-                        os.environ[key] = val
-
-_load_env_file()
-
-API_KEY = os.environ.get("OKX_API_KEY", "")
-SECRET = os.environ.get("OKX_SECRET_KEY", "")
-PASSPHRASE = os.environ.get("OKX_PASSPHRASE", "")
-BASE = os.environ.get("OKX_BASE_URL", "https://www.okx.com")
+from config import API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready
+import base64, hmac, hashlib
 
 
 def iso_now():
@@ -54,25 +29,22 @@ def fetch(path):
         "OK-ACCESS-TIMESTAMP": timestamp,
         "OK-ACCESS-PASSPHRASE": PASSPHRASE,
     }
+    import os
     proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
     if proxy:
         handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
         opener = urllib.request.build_opener(handler)
-        req = urllib.request.Request(BASE + path, headers=headers)
+        req = urllib.request.Request(BASE_URL + path, headers=headers)
         with opener.open(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
     else:
-        req = urllib.request.Request(BASE + path, headers=headers)
+        req = urllib.request.Request(BASE_URL + path, headers=headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--today", action="store_true", help="Fetch bills from today 00:00 UTC")
-    args = parser.parse_args()
-
+    ensure_api_ready()
     today = datetime.now(timezone.utc).date()
     begin = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
     end = begin + timedelta(days=1)

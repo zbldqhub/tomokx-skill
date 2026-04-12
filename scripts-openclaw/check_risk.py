@@ -6,14 +6,13 @@ import json
 import subprocess
 from datetime import datetime, timezone, timedelta
 
-WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
-STOP_FILE = os.path.join(WORKSPACE, ".trading_stopped")
+from config import WORKSPACE, STOP_FILE, DAILY_LOSS_LIMIT, ENV_FILE
 
 
 def read_trading_stopped():
     if not os.path.exists(STOP_FILE):
         return 0
-    # Check if file was modified today
+    # Reset if file was not modified today
     mtime = datetime.fromtimestamp(os.path.getmtime(STOP_FILE), tz=timezone.utc)
     today = datetime.now(timezone.utc).date()
     if mtime.date() != today:
@@ -27,9 +26,8 @@ def read_trading_stopped():
 
 def run_bills():
     env = os.environ.copy()
-    env_path = os.path.join(WORKSPACE, ".env.trading")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("export "):
@@ -79,6 +77,10 @@ def calc_sl_count(bills_data):
 def main():
     stopped = read_trading_stopped()
     bills = run_bills()
+    if "error" in bills:
+        print(json.dumps({"error": bills["error"]}, indent=2))
+        sys.exit(1)
+
     daily_pnl, matched = calc_daily_loss(bills)
     sl_count = calc_sl_count(bills)
 
@@ -88,7 +90,7 @@ def main():
     if stopped >= 3:
         should_stop = True
         reason = f"Consecutive stop-loss limit reached ({stopped} >= 3)"
-    elif daily_pnl is not None and daily_pnl < -40:
+    elif daily_pnl is not None and daily_pnl < DAILY_LOSS_LIMIT:
         should_stop = True
         reason = f"Daily loss limit exceeded ({daily_pnl} USDT)"
 
