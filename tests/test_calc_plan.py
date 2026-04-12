@@ -77,9 +77,47 @@ def test_full_plan_json():
             assert float(p["slTriggerPx"]) != float(p["px"])
 
 
+def test_inner_replenish_boost_short():
+    import subprocess, tempfile
+    market = {"last": 2200, "volatility_1h": 12}
+    exposure = {"long_orders": 4, "short_orders": 2, "orders_count": 6, "positions_count": 2, "total": 8, "remaining_capacity": 12}
+    strategy = {"trend": "bullish", "target_long": 2, "target_short": 1, "adjusted_gap": 14}
+    far_orders = {"far_orders": []}
+    orders = {"data": [
+        {"instId": "ETH-USDT-SWAP", "state": "live", "side": "sell", "posSide": "short", "px": "2244.58", "ordId": "s1"},
+        {"instId": "ETH-USDT-SWAP", "state": "live", "side": "sell", "posSide": "short", "px": "2288.75", "ordId": "s2"},
+        {"instId": "ETH-USDT-SWAP", "state": "live", "side": "buy", "posSide": "long", "px": "2190", "ordId": "l1"},
+    ]}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = {}
+        for name, data in [("market", market), ("exposure", exposure), ("strategy", strategy), ("far_orders", far_orders), ("orders", orders)]:
+            p = os.path.join(tmpdir, f"{name}.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            paths[name] = p
+
+        script = os.path.join(os.path.dirname(__file__), "..", "scripts-openclaw", "calc_plan.py")
+        r = subprocess.run(
+            [sys.executable, script, paths["market"], paths["exposure"], paths["strategy"], paths["far_orders"], paths["orders"]],
+            capture_output=True, text=True
+        )
+        assert r.returncode == 0, r.stderr
+        plan = json.loads(r.stdout)
+        # Should boost short_needed from 0 to 1 because price moved below all short orders
+        assert len(plan["placements"]) >= 1, f"Expected at least 1 placement, got {plan}"
+        short_placements = [p for p in plan["placements"] if p["posSide"] == "short"]
+        assert len(short_placements) == 1
+        px = float(short_placements[0]["px"])
+        assert px > 2200
+        assert px < 2244.58
+        assert "boost needed=1" in " ".join(plan["reasoning"]["short"]["notes"])
+
+
 if __name__ == "__main__":
     test_calc_tp_sl_offset()
     test_pick_best_long_px_inner()
     test_pick_best_short_px_outer()
     test_full_plan_json()
+    test_inner_replenish_boost_short()
     print("test_calc_plan passed")

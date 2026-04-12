@@ -174,6 +174,22 @@ def main():
     long_needed = max(0, target_long - long_orders_count)
     short_needed = max(0, target_short - short_orders_count)
 
+    cancellations = far_orders.get("far_orders", [])
+    far_ord_ids = {o.get("ordId") for o in cancellations}
+
+    existing_long = get_existing_prices(orders, "buy", "long", far_ord_ids)
+    existing_short = get_existing_prices(orders, "sell", "short", far_ord_ids)
+
+    # Inner replenish boost: price moved inside grid, need to fill the gap
+    long_boost_reason = ""
+    short_boost_reason = ""
+    if existing_long and current_price > max(existing_long) + gap:
+        long_needed = max(long_needed, 1)
+        long_boost_reason = f"Price moved above all long orders (max={max(existing_long)}), boost needed=1"
+    if existing_short and current_price < min(existing_short) - gap:
+        short_needed = max(short_needed, 1)
+        short_boost_reason = f"Price moved below all short orders (min={min(existing_short)}), boost needed=1"
+
     if long_needed + short_needed > remaining_capacity:
         if trend == "bullish":
             long_needed = min(long_needed, remaining_capacity)
@@ -186,31 +202,27 @@ def main():
             long_needed = min(long_needed, each)
             short_needed = min(short_needed, remaining_capacity - long_needed)
 
-    cancellations = far_orders.get("far_orders", [])
-    far_ord_ids = {o.get("ordId") for o in cancellations}
     placements = []
 
     reasoning = {
         "long": {
-            "existing": [],
+            "existing": existing_long,
             "needed": long_needed,
             "mode": "",
             "selected": [],
             "rejected": [],
-            "notes": [],
+            "notes": [long_boost_reason] if long_boost_reason else [],
         },
         "short": {
-            "existing": [],
+            "existing": existing_short,
             "needed": short_needed,
             "mode": "",
             "selected": [],
             "rejected": [],
-            "notes": [],
+            "notes": [short_boost_reason] if short_boost_reason else [],
         },
     }
 
-    existing_long = get_existing_prices(orders, "buy", "long", far_ord_ids)
-    reasoning["long"]["existing"] = existing_long
     chosen_long = []
     for i in range(long_needed):
         px, mode, rejected = pick_best_long_px(current_price, existing_long + chosen_long, gap, chosen_long)
@@ -239,8 +251,6 @@ def main():
             "slTriggerPx": str(sl)
         })
 
-    existing_short = get_existing_prices(orders, "sell", "short", far_ord_ids)
-    reasoning["short"]["existing"] = existing_short
     chosen_short = []
     for i in range(short_needed):
         px, mode, rejected = pick_best_short_px(current_price, existing_short + chosen_short, gap, chosen_short)
