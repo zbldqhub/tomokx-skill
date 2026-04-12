@@ -54,6 +54,11 @@ def count_losing_closes(bills_data):
 def read_current():
     if not os.path.exists(STOP_FILE):
         return 0
+    # Reset if file was not modified today
+    mtime = datetime.fromtimestamp(os.path.getmtime(STOP_FILE), tz=timezone.utc)
+    today = datetime.now(timezone.utc).date()
+    if mtime.date() != today:
+        return 0
     try:
         with open(STOP_FILE, "r", encoding="utf-8") as f:
             return int(f.read().strip())

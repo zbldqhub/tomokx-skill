@@ -6,7 +6,7 @@ Appends a structured summary line to auto_trade.log.
 import os
 import sys
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 
 LOG_PATH = os.path.expanduser(r"~\.openclaw\workspace\auto_trade.log")
 
@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--actions", required=True, help="Executed actions")
     args = parser.parse_args()
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     line = (
         f"[{timestamp}] | tomokx | Trading Cycle Summary\n"
         f"- Market Trend: {args.trend}\n"

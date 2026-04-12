@@ -5,6 +5,14 @@ metadata:
   {"openclaw": {"emoji": "📈"}}
 ---
 
+# 策略名称
+ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
+
+# 执行节奏
+每 30 分钟触发一次
+
+---
+
 ## Core Strategy
 
 - **Pure opening grid**: Only `buy+long` and `sell+short`. Closing is handled by per-order TP/SL.
@@ -40,67 +48,111 @@ metadata:
 
 ---
 
-## Execution Steps
+# Step 1 · 行情数据采集
 
-### Phase 1: Data Preparation (Scripted)
-
-Run the prepared data script. It loads env, checks risk, fetches market/orders/positions, and outputs a JSON payload.
-
+调用 `fetch_market.py` 获取 ETH-USDT-SWAP 市场行情：
 ```bash
-python3 ~/.openclaw/workspace/scripts/prepare_trade_data.py
+python3 ~/.openclaw/workspace/scripts/fetch_market.py
 ```
 
-**What it does (non-AI):**
-- Loads API credentials
-- Checks `.trading_stopped` count
-- Checks daily P&L limit
-- Fetches market ticker + 1h candles
-- Classifies live `sell+short` and `buy+long` orders
-- Counts 10x isolated positions
-- Calculates `total` and `remaining_capacity`
-- Identifies far orders (>100 USDT away)
-- Computes suggested `gap`
-- Counts today's losing closes
-
-If `should_stop` is true in the JSON output, stop immediately and notify the user with the `stop_reason`.
+**输出字段：**
+- `last`: 当前价格
+- `bidPx` / `askPx`: 买一/卖一价
+- `spread`: 买卖价差（askPx - bidPx）
+- `change24h_pct`: 24h 涨跌幅
+- `trend_1h`: 1h 趋势（bullish / bearish / sideways）
+- `volatility_1h`: 1h 波动率
 
 ---
 
-### Phase 2: AI Analysis & Decision
+# Step 2 · 风险与仓位数据采集
 
-Read the JSON output from Phase 1. AI performs the following steps:
+调用 `check_risk.py` 获取风控状态：
+```bash
+python3 ~/.openclaw/workspace/scripts/check_risk.py
+```
+**输出字段：** `stopped_count`、`daily_pnl`、`sl_count_today`。  
+**硬规则**：若 `stopped_count >= 3` 或 `daily_pnl < -40`，立即停止并通知用户。
 
-**Step 2:** Determine trend. Prefer `trend_1h` over `change24h_pct` when they conflict.
+调用 `fetch_orders.py` 和 `fetch_positions.py` 获取原始挂单与持仓：
+```bash
+python3 ~/.openclaw/workspace/scripts/fetch_orders.py
+python3 ~/.openclaw/workspace/scripts/fetch_positions.py
+```
 
-**Step 7:** Determine target distribution from the trend table.
+调用 `calc_exposure.py` 计算汇总数据：
+```bash
+python3 ~/.openclaw/workspace/scripts/calc_exposure.py <orders.json> <positions.json>
+```
+**输出字段：** `short_orders`、`long_orders`、`orders_count`、`positions_count`、`total`、`remaining_capacity`。
 
-**Step 8:** Plan orders.
-- Conditions: `total < 20`, `remaining_capacity > 0`, per-side ≤ 4.
-- `replenish_count = min(10 - orders_count, remaining_capacity, 5)`.
-- **Absolute distance cap:** Do NOT place orders ≥ 80 USDT from current price.
-- **Outer replenish:** `new_short = max_short_px + gap`; `new_long = min_long_px - gap`.
-- **Inner replenish (allowed when price moved inside the grid):**
-  - Short: `new_short = min(current_price + gap, innermost_short_px - gap)` (must be > `current_price + gap`)
-  - Long: `new_long = max(current_price - gap, innermost_long_px + gap)` (must be < `current_price - gap`)
-- **Build from scratch (0 live orders):**
-  - Short #1 = `current_price × 1.002`, then +gap outward.
-  - Long #1 = `current_price × 0.998`, then -gap outward.
-- **Intra-cycle gap check:** All planned orders on the same side must be ≥ `gap` apart.
-- **TP/SL:**
-  - `volatility_1h` < 5 → TP 8-15, SL 80-90
-  - 5-10 → TP 15-25, SL 85-95
-  - 10-15 → TP 20-35, SL 90-105
-  - 15-25 → TP 30-45, SL 100-115
-  - > 25 → TP 40-50, SL 110-120
-  - Long: TP = px + offset, SL = px - offset
-  - Short: TP = px - offset, SL = px + offset
-- **Pre-placement validation (MUST check before every order):**
-  - Long order: `tpTriggerPx > px` AND `slTriggerPx < px`
-  - Short order: `tpTriggerPx < px` AND `slTriggerPx > px`
-  - If this check fails, **DO NOT place the order**. Recalculate TP/SL and re-check. If still invalid, skip this order and log the error.
+调用 `calc_strategy.py` 计算策略建议：
+```bash
+python3 ~/.openclaw/workspace/scripts/calc_strategy.py <market.json> <total>
+```
+**输出字段：** `trend`、`target_long`、`target_short`、`adjusted_gap`。
 
-AI must produce a `plan.json` file describing cancellations and placements:
+调用 `filter_far_orders.py` 筛选远离订单：
+```bash
+python3 ~/.openclaw/workspace/scripts/filter_far_orders.py <orders.json> <last_price>
+```
+**输出字段：** `far_orders`（偏离 >100 USDT 的订单列表）。
 
+调用 `analyze_history.py` 分析近期历史盈亏：
+```bash
+python3 ~/.openclaw/workspace/scripts/analyze_history.py
+```
+**输出字段：**
+- `total_pnl_7d` / `total_pnl_30d`: 近 7/30 天总盈亏
+- `win_days_7d` / `loss_days_7d`: 近 7 天盈利/亏损天数
+- `avg_daily_pnl_7d`: 近 7 天日均盈亏
+- `max_daily_loss_7d`: 近 7 天最大单日亏损
+- `trend_performance_7d`: 不同趋势下的盈亏表现
+- `recommendation`: 策略优化建议
+
+> **脚本失败处理**：若 Step 1~2 中任一脚本输出包含 `error` 或执行超时，AI 应先尝试**重跑一次该脚本**（最多 2 次，间隔 2 秒）。若仍失败，本次跳过并通知用户具体异常。
+
+---
+
+# Step 3 · AI 综合判断（核心）
+
+基于以上数据，你作为交易 AI 需要推理：
+
+1. **趋势确认**：优先采用 `trend_1h`。当 `trend_1h` 与 `change24h_pct` 冲突时，以 `trend_1h` 为准。若 `volatility_1h > 25`，决定是否暂停或加大 gap；若 `< 5`，判断是否机会不足。
+2. **目标与失衡**：当前挂单/持仓分布是否与 `target_long` / `target_short` 匹配？是否存在单侧严重失衡需要优先补单？
+3. **异常判断**：是否存在价格跳空、spread > 2 USDT 等市场异常？是否应整体重建网格而非简单补单？
+4. **撤单决策**：`far_orders` 中偏离 >100 USDT 的订单，原则上全部撤销。
+5. **历史盈亏优化**：参考 `analyze_history.py` 输出的 `trend_performance_7d` 和 `recommendation`。若某类趋势近期持续亏损，AI 可决定降低该类行情下的开仓数量、加大 gap 或直接跳过。
+6. **最终决策**：综合以上五点，给出最终结论：**执行补单 / 仅撤销远单 / 本次跳过**，并说明理由。
+
+若决策为 **执行补单**，先调用 `calc_plan.py` 生成**建议草案**：
+```bash
+python3 ~/.openclaw/workspace/scripts/calc_plan.py \
+  <market.json> <exposure.json> <strategy.json> <far_orders.json> <orders.json>
+```
+
+AI 必须基于以下数据对草案进行**审核、修改或否决**：
+
+1. **价格布局是否合理**
+   - `calc_plan.py` 已自动生成**内扩**和**外扩**候选方案，并优先选择离当前价最近的有效位置。
+   - AI 检查：当价格明显 moved inside grid 时，草案是否在内侧生成了补单？若布局仍不符合当前市场结构，AI 可直接修改 `px`。
+
+2. **gap 是否需要动态调整**
+   - 单侧严重失衡或市场异常时，AI 可增大/减小特定订单的间距。
+
+3. **TP/SL 是否合理**
+   - `volatility_1h` 处于边界值或存在特殊风险时，AI 可调整 `tpTriggerPx` 和 `slTriggerPx`。
+
+4. **数量是否正确**
+   - per-side 是否超过 4？总暴露是否会超过 20？剩余容量是否足够？
+   - 若草案计算有误，AI 可直接删减订单。
+
+5. **前置验证（逐单检查）**
+   - Long 单必须 `tpTriggerPx > px` 且 `slTriggerPx < px`
+   - Short 单必须 `tpTriggerPx < px` 且 `slTriggerPx > px`
+   - 未通过验证的订单必须修改参数或删除。
+
+AI 修改完成后，将最终计划保存为 `plan.json`（路径 `/tmp/tomokx_plan.json`）：
 ```json
 {
   "cancellations": [
@@ -118,33 +170,39 @@ AI must produce a `plan.json` file describing cancellations and placements:
       "tpTriggerPx": "2263.75",
       "slTriggerPx": "2411.75"
     }
-  ]
+  ],
+  "summary": {
+    "trend": "bullish",
+    "price": "2217.03",
+    "orders": "8",
+    "positions": "6.4",
+    "total": "14.4",
+    "actions": "Cancelled 1 far order, placed 1 sell+short @ 2301.75"
+  }
 }
-```
-
-Save it to:
-```bash
-/tmp/tomokx_plan.json
 ```
 
 ---
 
-### Phase 3: Execution (Scripted)
+# Step 4 · 执行交易计划
 
-Execute the AI-generated plan:
-
+调用 `execute_orders.py` 执行 AI 审核通过的 `plan.json`：
 ```bash
 python3 ~/.openclaw/workspace/scripts/execute_orders.py /tmp/tomokx_plan.json
 ```
 
-Then update the stop-loss counter:
+**执行失败处理**：
+- 若输出中出现 **余额不足 / 价格已失效** 等错误：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划（减少数量或调整价格），再次执行。
+- 若出现 **Rate limit (429)**：等待 10 秒后整体重试一次。
+- 若出现 **其他错误**：跳过该单，记录原因到日志，继续执行剩余订单。
 
+调用 `update_stop_counter.py` 更新止损计数器：
 ```bash
 python3 ~/.openclaw/workspace/scripts/update_stop_counter.py
 ```
+若输出 `should_stop` 为 true，立即停止并通知用户。
 
-Finally, write the log:
-
+调用 `log_trade.py` 记录日志：
 ```bash
 python3 ~/.openclaw/workspace/scripts/log_trade.py \
   --trend "<trend>" \
@@ -155,7 +213,7 @@ python3 ~/.openclaw/workspace/scripts/log_trade.py \
   --actions "<actions>"
 ```
 
-Notify with:
+最后通知用户执行摘要：
 ```
 📊 ETH Trader 执行完成
 趋势: <trend> | 价格: <price> | 挂单: <orders>/20 | 持仓: <positions> | 总暴露: <total>/20

@@ -282,11 +282,20 @@ tomokx-skill/
 │   ├── eth-trader-run.sh
 │   ├── env-check.sh
 │   ├── env-check.ps1
+│   ├── analyze_history.py       # 分析近期历史盈亏（供 AI 优化决策）
+│   ├── analyze_history.py       # 分析近期历史盈亏（供 AI 优化决策）
+│   ├── calc_exposure.py         # 计算总暴露/剩余容量
+│   ├── calc_plan.py             # 根据策略生成具体下单计划
+│   ├── calc_strategy.py         # 计算趋势/目标分布/gap建议
+│   ├── check_risk.py            # 检查停止计数器和日亏损
 │   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
 │   ├── execute_orders.py        # 批量下单/撤单执行器
+│   ├── fetch_market.py          # 获取市场行情
+│   ├── fetch_orders.py          # 获取挂单
+│   ├── fetch_positions.py       # 获取持仓
+│   ├── filter_far_orders.py     # 筛选远离订单
 │   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
-│   ├── log_trade.py             # 交易日志自动写入
-│   ├── prepare_trade_data.py    # 一键聚合交易前置数据
+   ├── log_trade.py             # 交易日志自动写入
 │   ├── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
 │   ├── update_stop_counter.py   # 更新止损计数器
 │   ├── patch-okx-cli.js         # 修复 OKX CLI ProxyAgent TLS
@@ -295,12 +304,18 @@ tomokx-skill/
 ├── scripts-openclaw/             # Linux 配套脚本
 │   ├── eth-trader-run.sh
 │   ├── env-check.sh
+│   ├── calc_exposure.py         # 计算总暴露/剩余容量
+│   ├── calc_strategy.py         # 计算趋势/目标分布/gap建议
+│   ├── check_risk.py            # 检查停止计数器和日亏损
 │   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
 │   ├── execute_orders.py        # 批量下单/撤单执行器
+│   ├── fetch_market.py          # 获取市场行情
+│   ├── fetch_orders.py          # 获取挂单
+│   ├── fetch_positions.py       # 获取持仓
+│   ├── filter_far_orders.py     # 筛选远离订单
 │   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
 │   ├── log_trade.py             # 交易日志自动写入
 │   ├── okx_account_balance.py   # 账户余额查询
-│   ├── prepare_trade_data.py    # 一键聚合交易前置数据
 │   ├── run_analyzer.py          # 快速运行市场分析
 │   ├── run_balance.py           # 快速运行余额查询
 │   ├── run_bills.py             # 快速运行账单查询

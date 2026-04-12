@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Check risk limits: trading_stopped count and daily P&L."""
+import os
+import sys
+import json
+import subprocess
+from datetime import datetime, timezone, timedelta
+
+WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
+STOP_FILE = os.path.join(WORKSPACE, ".trading_stopped")
+
+
+def read_trading_stopped():
+    if not os.path.exists(STOP_FILE):
+        return 0
+    # Check if file was modified today
+    mtime = datetime.fromtimestamp(os.path.getmtime(STOP_FILE), tz=timezone.utc)
+    today = datetime.now(timezone.utc).date()
+    if mtime.date() != today:
+        return 0
+    try:
+        with open(STOP_FILE, "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except:
+        return 0
+
+
+def run_bills():
+    env = os.environ.copy()
+    env_path = os.path.join(WORKSPACE, ".env.trading")
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[7:]
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    v = v.strip().strip('"').strip("'")
+                    env[k] = v
+    cmd = [sys.executable, os.path.join(WORKSPACE, "scripts", "get_bills.py"), "--today"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+    if r.returncode != 0:
+        return {"error": r.stderr or "get_bills failed"}
+    return json.loads(r.stdout)
+
+
+def calc_daily_loss(bills_data):
+    if not isinstance(bills_data, dict) or bills_data.get("code") != "0":
+        return None, 0
+    records = bills_data.get("data", [])
+    total = 0.0
+    matched = 0
+    for r in records:
+        if r.get("instId") != "ETH-USDT-SWAP":
+            continue
+        sub = int(r.get("subType", -1))
+        if sub not in {4, 6, 110, 111, 112}:
+            continue
+        total += float(r.get("pnl", "0") or "0")
+        matched += 1
+    return total, matched
+
+
+def calc_sl_count(bills_data):
+    count = 0
+    if isinstance(bills_data, dict) and bills_data.get("code") == "0":
+        for r in bills_data.get("data", []):
+            if r.get("instId") != "ETH-USDT-SWAP":
+                continue
+            sub = int(r.get("subType", -1))
+            if sub in {4, 6, 110, 111, 112}:
+                pnl = float(r.get("pnl", "0") or "0")
+                if pnl < 0:
+                    count += 1
+    return count
+
+
+def main():
+    stopped = read_trading_stopped()
+    bills = run_bills()
+    daily_pnl, matched = calc_daily_loss(bills)
+    sl_count = calc_sl_count(bills)
+
+    should_stop = False
+    reason = ""
+
+    if stopped >= 3:
+        should_stop = True
+        reason = f"Consecutive stop-loss limit reached ({stopped} >= 3)"
+    elif daily_pnl is not None and daily_pnl < -40:
+        should_stop = True
+        reason = f"Daily loss limit exceeded ({daily_pnl} USDT)"
+
+    result = {
+        "should_stop": should_stop,
+        "stop_reason": reason,
+        "stopped_count": stopped,
+        "daily_pnl": round(daily_pnl, 4) if daily_pnl is not None else None,
+        "daily_pnl_matched_records": matched,
+        "sl_count_today": sl_count,
+    }
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()
