@@ -243,6 +243,56 @@ python3 ~/.openclaw/workspace/scripts/analyze_decisions.py
 
 AI 应阅读该报告并结合最新市场状态，判断是否调整 `config.py` 中的 gap 表或默认 target 分配。
 
+### 订单生命周期跟踪
+
+每次成功下单后，系统会在 `~/.openclaw/workspace/order_tracking.jsonl` 记录该订单的元数据（价格、TP/SL、expansion_type、趋势、gap）。
+
+每周运行一次 `analyze_trades.py`，通过 OKX bills API 匹配每个订单的实际平仓盈亏：
+```bash
+python3 ~/.openclaw/workspace/scripts/analyze_trades.py
+```
+
+输出示例：
+```json
+{
+  "tracking_total": 28,
+  "closed_count": 22,
+  "open_or_unfilled_count": 6,
+  "top_setups": [
+    {
+      "trend": "bullish",
+      "gap": "14",
+      "expansion_type": "inner",
+      "posSide": "short",
+      "count": 5,
+      "avg_pnl": 0.92,
+      "win_rate": 0.8
+    }
+  ],
+  "bottom_setups": [
+    {
+      "trend": "bullish",
+      "gap": "14",
+      "expansion_type": "outer",
+      "posSide": "long",
+      "count": 4,
+      "avg_pnl": -0.34,
+      "win_rate": 0.25
+    }
+  ],
+  "recommendations": [
+    "Best setup: short inner in bullish with gap=14 -> avg_pnl=0.92 win_rate=0.8 (n=5)",
+    "Worst setup: long outer in bullish with gap=14 -> avg_pnl=-0.34 win_rate=0.25 (n=4); consider avoiding"
+  ]
+}
+```
+
+**优化闭环**：
+1. 阅读 `analyze_trades.py` 的 per-order 盈亏数据，找出高胜率/正期望的 `(trend, gap, expansion_type, posSide)` 组合
+2. 对比 `analyze_decisions.py` 的粗粒度归因，确认方向
+3. AI 结合当前市场状态，决定是否微调 `config.py` 的 gap 表或 SKILL.md 的默认 target 分配
+4. 继续执行，积累更多订单数据，验证调整效果
+
 ---
 
 ## CLI Reference (v1.3.0)

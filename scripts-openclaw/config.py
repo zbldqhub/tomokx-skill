@@ -12,6 +12,7 @@ ENV_FILE = os.path.join(WORKSPACE, ".env.trading")
 LOG_PATH = os.path.join(WORKSPACE, "auto_trade.log")
 JSONL_PATH = os.path.join(WORKSPACE, "auto_trade.jsonl")
 DECISION_LOG_PATH = os.path.join(WORKSPACE, "decisions.jsonl")
+ORDER_TRACKING_PATH = os.path.join(WORKSPACE, "order_tracking.jsonl")
 STOP_FILE = os.path.join(WORKSPACE, ".trading_stopped")
 
 # Strategy constants

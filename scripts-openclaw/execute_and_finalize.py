@@ -11,7 +11,7 @@ import subprocess
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready
+from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, ORDER_TRACKING_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready
 import base64, hmac, hashlib
 
 
@@ -65,7 +65,11 @@ def place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
         f"--slTriggerPx={sl}",
         "--slOrdPx=-1",
     ], env)
-    return out.strip()
+    out_stripped = out.strip()
+    import re
+    m = re.search(r'"ordId"\s*:\s*"(\d+)"', out_stripped)
+    ord_id = m.group(1) if m else ""
+    return {"raw": out_stripped, "ordId": ord_id}
 
 
 # --- Stop counter helpers ---
@@ -253,6 +257,35 @@ def _append_decision(plan, summary, daily_pnl):
     return entry["decision_id"]
 
 
+def _append_order_tracking(plan, decision_id):
+    os.makedirs(os.path.dirname(ORDER_TRACKING_PATH), exist_ok=True)
+    reasoning = plan.get("reasoning", {})
+    market = plan.get("summary", {})
+    long_expansion = reasoning.get("long", {}).get("expansion_type", "")
+    short_expansion = reasoning.get("short", {}).get("expansion_type", "")
+    with open(ORDER_TRACKING_PATH, "a", encoding="utf-8") as f:
+        for p in plan.get("placements", []):
+            side = p.get("posSide")
+            expansion = long_expansion if side == "long" else short_expansion
+            entry = {
+                "decision_id": decision_id,
+                "ordId": p.get("ordId", ""),
+                "instId": p.get("instId", "ETH-USDT-SWAP"),
+                "side": p.get("side"),
+                "posSide": side,
+                "px": p.get("px"),
+                "sz": p.get("sz"),
+                "tpTriggerPx": p.get("tpTriggerPx"),
+                "slTriggerPx": p.get("slTriggerPx"),
+                "placed_at": iso_now(),
+                "market_trend": market.get("trend", ""),
+                "gap": market.get("gap", ""),
+                "volatility_1h": market.get("volatility_1h", ""),
+                "expansion_type": expansion,
+            }
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def log_trade(summary, gap="", high24h="", low24h="", short_orders="", long_orders=""):
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     trend = summary.get("trend", "unknown")
@@ -338,7 +371,13 @@ def main():
     else:
         print(f"[BILLS] ERROR: {bills['error']}")
 
-    # 1. Execute orders
+    # 1. Log decision (intent) and get decision_id before execution
+    decision_id = None
+    if daily_pnl is not None:
+        decision_id = _append_decision(plan, summary, daily_pnl)
+        print(f"[DECISION_LOG] Appended {decision_id}")
+
+    # 2. Execute orders
     for item in plan.get("cancellations", []):
         inst_id = item.get("instId", "ETH-USDT-SWAP")
         ord_id = item["ordId"]
@@ -356,17 +395,26 @@ def main():
         pos_side = item["posSide"]
         tp = item["tpTriggerPx"]
         sl = item["slTriggerPx"]
-        out = place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
-        result["execution"]["placements"].append({"px": px, "side": side, "posSide": pos_side, "result": out})
+        place_res = place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
+        out = place_res["raw"]
+        item["ordId"] = place_res["ordId"]
+        result["execution"]["placements"].append({"px": px, "side": side, "posSide": pos_side, "ordId": place_res["ordId"], "result": out})
         print(f"[PLACE] {side}+{pos_side} @ {px} TP={tp} SL={sl} -> {out}")
         if "429" in out or "rate limit" in out.lower():
             print("[WARN] Rate limit detected, waiting 10s...")
             time.sleep(10)
-            out = place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
+            place_res = place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
+            out = place_res["raw"]
+            item["ordId"] = place_res["ordId"]
             result["execution"]["placements"][-1]["retry_result"] = out
             print(f"[RETRY] {side}+{pos_side} @ {px} -> {out}")
 
-    # 2. Update stop counter (reuse bills)
+    # 3. Log order tracking (after execution so ordId is known)
+    if decision_id:
+        _append_order_tracking(plan, decision_id)
+        print("[ORDER_TRACKING] Appended placements")
+
+    # 4. Update stop counter (reuse bills)
     if "error" not in bills:
         losing = count_losing_closes(bills)
         current = read_stop_counter()
@@ -383,15 +431,10 @@ def main():
         result["stop_counter"] = {"error": bills["error"]}
         print(f"[STOP_COUNTER] ERROR: {bills['error']}")
 
-    # 3. Log trade
+    # 5. Log trade
     log_msg = log_trade(summary)
     result["log"] = log_msg
     print(f"[LOG] {log_msg}")
-
-    # 4. Log decision
-    if daily_pnl is not None:
-        did = _append_decision(plan, summary, daily_pnl)
-        print(f"[DECISION_LOG] Appended {did}")
 
     print("\n" + json.dumps(result, indent=2))
 
