@@ -7,9 +7,13 @@ outputs a structured recommendation with confidence score and reasoning.
 import json
 import sys
 
+# Force UTF-8 stdout on Windows to avoid GBK encode errors for CJK characters
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 
 def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 
