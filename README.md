@@ -6,7 +6,8 @@
 
 - 🤖 **Agent 决策 + 脚本执行**: AI 负责审核与最终决策，脚本负责数据采集、草案生成和订单执行
 - 📊 **纯开仓双向网格**: 只下开仓单 (`buy+long` / `sell+short`)，平仓完全交给每单自带的 TP/SL
-- 📈 **多时间框架趋势分析**: 结合 1h 和 24h 数据判断趋势
+- 📈 **多时间框架趋势分析**: 结合 4h（主趋势）、1h（确认）、15m（共振）判断趋势，并引入趋势对齐度评分
+- 💰 **Funding Rate 纠偏**: 自动读取资金费率，当多头/空头付费显著偏向一侧时动态调整 target 分布
 - 🛡️ **多重风控**: 
   - 连续止损 3 次自动暂停
   - 日亏损限制 40 USDT（仅统计 ETH-USDT-SWAP）
@@ -109,11 +110,28 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 
 ### 趋势判断
 
-| 24h 涨跌 | 趋势 | 多单目标 | 空单目标 |
-|---------|------|---------|---------|
-| > +2% | 看涨 (Bullish) | 2 | 1 |
-| < -2% | 看跌 (Bearish) | 1 | 2 |
-| -2% ~ +2% | 横盘 (Sideways) | 1 | 2 |
+趋势不再只看 24h 涨跌幅，而是采用 **4h 主趋势 + 1h 确认 + 15m 共振** 的三重时间框架：
+
+| 对齐度 | 条件 | 最终趋势 | Long | Short |
+|--------|------|---------|------|-------|
+| **strong** | 4h / 1h / 15m 三者同向 | 同向趋势 | 2 / 1 / 1 | 1 / 2 / 2 |
+| **moderate** | 4h 与 1h 同向，15m 可能不同 | 4h/1h 方向 | 同上 | 同上 |
+| **mixed** | 4h 与 15m 同向，1h 不同 | Sideways | 1 | 1 |
+| **weak** | 三者均不同向 | Sideways | 1 | 1 |
+
+- **4h** 作为中期过滤器，决定主方向
+- **1h** 用于确认或否定 4h 信号
+- **15m** 识别短期反转噪音
+- 当 `mixed` 或 `weak` 时，系统会自动压缩 target（两侧各 -1），降低暴露等待方向明确
+
+### Funding Rate 纠偏
+
+系统额外读取 ETH-USDT-SWAP 的资金费率：
+- `funding_rate > +0.01%`（多头付空头）→ `short_favored` → short target +1，long target -1
+- `funding_rate < -0.01%`（空头付多头）→ `long_favored` → long target +1，short target -1
+- `-0.01% ~ +0.01%` → `neutral`，不调整
+
+这为趋势判断增加了一个**市场情绪的量化纠偏信号**。
 
 ### 动态价格间隔
 
@@ -289,6 +307,11 @@ tomokx-skill/
 ---
 
 ## 📝 近期更新
+
+### v2.2.0 (2026-04-12)
+- **新增多时间框架趋势分析**: 4h（主趋势）+ 1h（确认）+ 15m（共振），引入 `trend_alignment`（strong/moderate/mixed/weak）
+- **新增 Funding Rate 纠偏**: 根据资金费率动态调整 target 分布
+- **calc_strategy.py 重构**: 基于 4h 主趋势、对齐度压缩 target、funding bias 调整 target 分布
 
 ### v2.1.0 (2026-04-12)
 - **新增自我学习系统**: `decisions.jsonl` + `order_tracking.jsonl` + `analyze_decisions.py` + `analyze_trades.py`
