@@ -165,20 +165,22 @@ def main():
 
     target_long = min(int(strategy.get("target_long", 1)), 4)
     target_short = min(int(strategy.get("target_short", 1)), 4)
-    long_orders_count = int(exposure.get("long_orders", 0))
-    short_orders_count = int(exposure.get("short_orders", 0))
     remaining_capacity = int(exposure.get("remaining_capacity", 0))
 
     tp_offset, sl_offset = calc_tp_sl_offset(vol)
-
-    long_needed = max(0, target_long - long_orders_count)
-    short_needed = max(0, target_short - short_orders_count)
 
     cancellations = far_orders.get("far_orders", [])
     far_ord_ids = {o.get("ordId") for o in cancellations}
 
     existing_long = get_existing_prices(orders, "buy", "long", far_ord_ids)
     existing_short = get_existing_prices(orders, "sell", "short", far_ord_ids)
+
+    # 用过滤掉 far orders 后的实际数量计算 needed，避免 exposure 与 existing 不一致
+    long_orders_count = len(existing_long)
+    short_orders_count = len(existing_short)
+
+    long_needed = max(0, target_long - long_orders_count)
+    short_needed = max(0, target_short - short_orders_count)
 
     # Inner replenish boost: price moved inside grid, need to fill the gap
     long_boost_reason = ""
