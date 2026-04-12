@@ -68,6 +68,11 @@ def fetch(path):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--today", action="store_true", help="Fetch bills from today 00:00 UTC")
+    args = parser.parse_args()
+
     today = datetime.now(timezone.utc).date()
     begin = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
     end = begin + timedelta(days=1)

@@ -88,7 +88,7 @@ def get_positions():
 
 
 def get_balance():
-    return fetch("/api/v5/asset/balances?ccy=USDT")
+    return fetch("/api/v5/account/balance?ccy=USDT")
 
 
 def analyze_1h(candle_1h):
