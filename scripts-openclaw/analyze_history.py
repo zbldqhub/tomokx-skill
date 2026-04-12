@@ -271,6 +271,17 @@ def main():
         low_entry_pnl = round(sum(pnl_7d[d] for d in low_entry_days), 4)
         high_entry_pnl = round(sum(pnl_7d[d] for d in high_entry_days), 4)
 
+        # Quantitative metrics
+        total_days = len(pnl_7d)
+        win_rate_7d = round(win_days_7d / total_days, 4) if total_days else 0.0
+        total_profit = sum(v for v in pnl_7d.values() if v > 0)
+        total_loss = abs(sum(v for v in pnl_7d.values() if v < 0))
+        profit_factor = round(total_profit / total_loss, 4) if total_loss else float('inf') if total_profit else 0.0
+        import statistics
+        daily_values = list(pnl_7d.values())
+        std_daily = round(statistics.stdev(daily_values), 4) if len(daily_values) > 1 else 0.0
+        sharpe_like_7d = round(avg_daily_7d / std_daily, 4) if std_daily else 0.0
+
         # Recommendation
         recommendation = ""
         best_trend = max((k for k in trend_pnl if k != "unknown"), key=lambda x: trend_pnl[x]["pnl"], default="")
@@ -300,9 +311,12 @@ def main():
             "total_pnl_30d": total_30d,
             "win_days_7d": win_days_7d,
             "loss_days_7d": loss_days_7d,
+            "win_rate_7d": win_rate_7d,
             "avg_daily_pnl_7d": avg_daily_7d,
             "max_daily_loss_7d": max_loss_7d,
             "max_drawdown_7d": mdd_7d,
+            "profit_factor": profit_factor,
+            "sharpe_like_7d": sharpe_like_7d,
             "trend_performance_7d": {k: v for k, v in trend_pnl.items() if k != "unknown"},
             "imbalance_analysis": {
                 "balanced_pnl": balanced_pnl,

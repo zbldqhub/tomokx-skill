@@ -20,9 +20,10 @@ def test_pick_best_long_px_inner():
     # Price moved inside grid: existing longs at 2200, 2190. Current price 2210
     existing = [2190, 2200]
     chosen = []
-    px = pick_best_long_px(2210, existing, 10, chosen)
+    px, mode, rejected = pick_best_long_px(2210, existing, 10, chosen)
     # Should pick inner candidate: 2210 - 10 = 2200, but must be < min(existing)=2190, so 2190-10=2180
     assert px is not None
+    assert mode == "replenish"
     assert px < 2210
     assert abs(px - 2210) < 80
     assert all(abs(px - p) >= 10 for p in existing)
@@ -31,8 +32,9 @@ def test_pick_best_long_px_inner():
 def test_pick_best_short_px_outer():
     existing = [2300, 2310]
     chosen = []
-    px = pick_best_short_px(2210, existing, 10, chosen)
+    px, mode, rejected = pick_best_short_px(2210, existing, 10, chosen)
     assert px is not None
+    assert mode == "replenish"
     assert px > 2210
     # Should pick inner candidate closest to current price: 2210 + 10 = 2220
     assert px == 2220

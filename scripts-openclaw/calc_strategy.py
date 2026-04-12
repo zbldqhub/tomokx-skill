@@ -25,12 +25,26 @@ def targets(trend):
     return 1, 2
 
 
+def adjust_targets_for_imbalance(target_long, target_short, exposure):
+    """Reduce target on the overweight side if imbalance is severe."""
+    long_total = exposure.get("long_orders", 0) + exposure.get("long_pos_units", 0)
+    short_total = exposure.get("short_orders", 0) + exposure.get("short_pos_units", 0)
+    imbalance = abs(long_total - short_total)
+    if imbalance >= 3:
+        if long_total > short_total and target_long > 0:
+            target_long = max(0, target_long - 1)
+        elif short_total > long_total and target_short > 0:
+            target_short = max(0, target_short - 1)
+    return target_long, target_short, imbalance
+
+
 def main():
     market_path = sys.argv[1] if len(sys.argv) > 1 else None
     total = sys.argv[2] if len(sys.argv) > 2 else None
+    exposure_path = sys.argv[3] if len(sys.argv) > 3 else None
 
     if not market_path or total is None:
-        print("Usage: python3 calc_strategy.py <market.json> <total>")
+        print("Usage: python3 calc_strategy.py <market.json> <total> [exposure.json]")
         sys.exit(1)
 
     with open(market_path, "r", encoding="utf-8") as f:
@@ -54,6 +68,17 @@ def main():
     if spread > 0.5:
         gap += 1
 
+    imbalance = 0
+    if exposure_path:
+        try:
+            with open(exposure_path, "r", encoding="utf-8") as f:
+                exposure = json.load(f)
+            target_long, target_short, imbalance = adjust_targets_for_imbalance(
+                target_long, target_short, exposure
+            )
+        except Exception:
+            pass
+
     result = {
         "trend": trend,
         "target_long": target_long,
@@ -63,6 +88,7 @@ def main():
         "volatility_1h": vol,
         "spread": spread,
         "change24h_pct": change24h,
+        "imbalance_score": imbalance,
     }
     print(json.dumps(result, indent=2))
 

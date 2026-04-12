@@ -33,7 +33,7 @@ def get_existing_prices(orders_data, side, pos_side, far_ord_ids):
         if o.get("side") == side and o.get("posSide") == pos_side:
             try:
                 prices.append(float(o.get("px", 0)))
-            except:
+            except Exception:
                 continue
     return sorted(prices)
 
@@ -41,6 +41,7 @@ def get_existing_prices(orders_data, side, pos_side, far_ord_ids):
 def pick_best_long_px(current_price, existing, gap, chosen):
     """Generate candidates (inner + outer) and pick the best valid long price."""
     candidates = []
+    mode = ""
     if existing:
         # Inner replenish candidates
         for k in range(1, 6):
@@ -51,24 +52,30 @@ def pick_best_long_px(current_price, existing, gap, chosen):
         for k in range(1, 6):
             c = min(existing) - gap * k
             candidates.append(c)
+        mode = "replenish"
     else:
         # Build from scratch
         for k in range(5):
             c = current_price * 0.998 - gap * k
             candidates.append(c)
+        mode = "scratch"
 
     # Filter valid candidates
     valid = []
+    rejected = []
     for c in candidates:
         if c >= current_price:
+            rejected.append((c, "above_current_price"))
             continue
         if abs(c - current_price) >= 80:
+            rejected.append((c, "distance_cap_80"))
             continue
         # Gap check with existing
         ok = True
         for p in existing:
             if abs(c - p) < gap - 0.001:
                 ok = False
+                rejected.append((c, f"gap_conflict_with_existing_{p}"))
                 break
         if not ok:
             continue
@@ -76,19 +83,21 @@ def pick_best_long_px(current_price, existing, gap, chosen):
         for p in chosen:
             if abs(c - p) < gap - 0.001:
                 ok = False
+                rejected.append((c, f"gap_conflict_with_chosen_{p}"))
                 break
         if ok:
             valid.append(c)
 
     if not valid:
-        return None
+        return None, mode, rejected
     # Pick closest to current_price
-    return max(valid)
+    return max(valid), mode, rejected
 
 
 def pick_best_short_px(current_price, existing, gap, chosen):
     """Generate candidates (inner + outer) and pick the best valid short price."""
     candidates = []
+    mode = ""
     if existing:
         # Inner replenish candidates
         for k in range(1, 6):
@@ -99,36 +108,43 @@ def pick_best_short_px(current_price, existing, gap, chosen):
         for k in range(1, 6):
             c = max(existing) + gap * k
             candidates.append(c)
+        mode = "replenish"
     else:
         # Build from scratch
         for k in range(5):
             c = current_price * 1.002 + gap * k
             candidates.append(c)
+        mode = "scratch"
 
     valid = []
+    rejected = []
     for c in candidates:
         if c <= current_price:
+            rejected.append((c, "below_current_price"))
             continue
         if abs(c - current_price) >= 80:
+            rejected.append((c, "distance_cap_80"))
             continue
         ok = True
         for p in existing:
             if abs(c - p) < gap - 0.001:
                 ok = False
+                rejected.append((c, f"gap_conflict_with_existing_{p}"))
                 break
         if not ok:
             continue
         for p in chosen:
             if abs(c - p) < gap - 0.001:
                 ok = False
+                rejected.append((c, f"gap_conflict_with_chosen_{p}"))
                 break
         if ok:
             valid.append(c)
 
     if not valid:
-        return None
+        return None, mode, rejected
     # Pick closest to current_price
-    return min(valid)
+    return min(valid), mode, rejected
 
 
 def main():
@@ -174,16 +190,42 @@ def main():
     far_ord_ids = {o.get("ordId") for o in cancellations}
     placements = []
 
+    reasoning = {
+        "long": {
+            "existing": [],
+            "needed": long_needed,
+            "mode": "",
+            "selected": [],
+            "rejected": [],
+            "notes": [],
+        },
+        "short": {
+            "existing": [],
+            "needed": short_needed,
+            "mode": "",
+            "selected": [],
+            "rejected": [],
+            "notes": [],
+        },
+    }
+
     existing_long = get_existing_prices(orders, "buy", "long", far_ord_ids)
+    reasoning["long"]["existing"] = existing_long
     chosen_long = []
-    for _ in range(long_needed):
-        px = pick_best_long_px(current_price, existing_long, gap, chosen_long)
+    for i in range(long_needed):
+        px, mode, rejected = pick_best_long_px(current_price, existing_long + chosen_long, gap, chosen_long)
+        if i == 0:
+            reasoning["long"]["mode"] = mode
+            reasoning["long"]["rejected"] = [[round(r[0], 2), r[1]] for r in rejected[:5]]
         if px is None:
+            reasoning["long"]["notes"].append(f"Attempt {i+1}: no valid candidate found")
             continue
         chosen_long.append(px)
+        reasoning["long"]["selected"].append(round(px, 2))
         tp = round(px + tp_offset, 2)
         sl = round(px - sl_offset, 2)
         if tp <= px or sl >= px:
+            reasoning["long"]["notes"].append(f"Price {px} failed TP/SL validation (tp={tp}, sl={sl})")
             continue
         placements.append({
             "instId": "ETH-USDT-SWAP",
@@ -198,15 +240,22 @@ def main():
         })
 
     existing_short = get_existing_prices(orders, "sell", "short", far_ord_ids)
+    reasoning["short"]["existing"] = existing_short
     chosen_short = []
-    for _ in range(short_needed):
-        px = pick_best_short_px(current_price, existing_short, gap, chosen_short)
+    for i in range(short_needed):
+        px, mode, rejected = pick_best_short_px(current_price, existing_short + chosen_short, gap, chosen_short)
+        if i == 0:
+            reasoning["short"]["mode"] = mode
+            reasoning["short"]["rejected"] = [[round(r[0], 2), r[1]] for r in rejected[:5]]
         if px is None:
+            reasoning["short"]["notes"].append(f"Attempt {i+1}: no valid candidate found")
             continue
         chosen_short.append(px)
+        reasoning["short"]["selected"].append(round(px, 2))
         tp = round(px - tp_offset, 2)
         sl = round(px + sl_offset, 2)
         if tp >= px or sl <= px:
+            reasoning["short"]["notes"].append(f"Price {px} failed TP/SL validation (tp={tp}, sl={sl})")
             continue
         placements.append({
             "instId": "ETH-USDT-SWAP",
@@ -231,6 +280,7 @@ def main():
     plan = {
         "cancellations": cancellations,
         "placements": placements,
+        "reasoning": reasoning,
         "summary": {
             "trend": trend,
             "price": str(current_price),

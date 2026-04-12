@@ -93,11 +93,11 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_exposure.py" "$env:TEM
 ```
 **输出字段：** `short_orders`、`long_orders`、`orders_count`、`positions_count`、`total`、`remaining_capacity`。
 
-调用 `calc_strategy.py` 计算策略建议：
+调用 `calc_strategy.py` 计算策略建议（可选传入 exposure.json 以启用失衡修正）：
 ```powershell
-python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_strategy.py" "$env:TEMP\market.json" <total>
+python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_strategy.py" "$env:TEMP\market.json" <total> "$env:TEMP\exposure.json"
 ```
-**输出字段：** `trend`、`target_long`、`target_short`、`adjusted_gap`。
+**输出字段：** `trend`、`target_long`、`target_short`、`adjusted_gap`、`imbalance_score`。
 
 调用 `filter_far_orders.py` 筛选远离订单：
 ```powershell
@@ -112,9 +112,12 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\analyze_history.py"
 **输出字段：**
 - `total_pnl_7d` / `total_pnl_30d`: 近 7/30 天总盈亏
 - `win_days_7d` / `loss_days_7d`: 近 7 天盈利/亏损天数
+- `win_rate_7d`: 近 7 天胜率
 - `avg_daily_pnl_7d`: 近 7 天日均盈亏
 - `max_daily_loss_7d`: 近 7 天最大单日亏损
 - `max_drawdown_7d`: 近 7 天最大回撤
+- `profit_factor`: 盈亏比（总盈利/总亏损绝对值）
+- `sharpe_like_7d`: 简化夏普（日均收益 / 日收益标准差）
 - `trend_performance_7d`: 不同趋势下的盈亏表现
 - `imbalance_analysis`: 单侧失衡 vs 均衡的盈亏对比
 - `gap_performance`: 大 gap vs 小 gap 的盈亏对比
@@ -127,17 +130,36 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\analyze_history.py"
 
 # Step 3 · AI 综合判断（核心）
 
-基于以上数据，你作为交易 AI 需要推理：
+先调用 `calc_recommendation.py` 获取**量化决策参考**，作为 AI 推理的基线：
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_recommendation.py" `
+  "$env:TEMP\market.json" `
+  "$env:TEMP\exposure.json" `
+  "$env:TEMP\strategy.json" `
+  "$env:TEMP\history.json"
+```
 
+**输出字段：**
+- `recommendation`: `proceed`（正常执行） / `pause`（暂停） / `cancel_only`（仅撤远单） / `reduce_exposure`（降低仓位） / `rebuild`（重建网格）
+- `confidence`: 置信度（0.0~0.99）
+- `reason`: 人类可读的理由汇总
+- `suggested_targets`: 脚本建议的修正后 target_long / target_short
+- `suggested_gap`: 脚本建议的 gap
+- `risk_flags`: 触发的风险标记列表（如 `liquidity_crisis`、`extreme_volatility`、`bad_regime`、`severe_imbalance`）
+- `historical_context`: 当前趋势的历史胜率、盈亏、回撤等
+
+> **AI 的任务不是从零推理，而是审核并决策**：
+> 1. 阅读 `calc_recommendation.py` 的建议；
+> 2. 结合你自己的判断：同意、修改或否决；
+> 3. 若脚本建议 `pause` 或 `cancel_only` 但你认为可以执行，必须在最终决策中**明确说明理由**。
+
+### AI 自主检查清单（复核用）
 1. **趋势确认**：优先采用 `trend_1h`。当 `trend_1h` 与 `change24h_pct` 冲突时，以 `trend_1h` 为准。若 `volatility_1h > 25`，决定是否暂停或加大 gap；若 `< 5`，判断是否机会不足。
-1.5. **流动性检查**：若 `spread > 2` 且 `bidSz < 10` 与 `askSz < 10` 同时成立，说明流动性枯竭，应直接暂停交易并通知用户。
-2. **目标与失衡**：当前挂单/持仓分布是否与 `target_long` / `target_short` 匹配？是否存在单侧严重失衡需要优先补单？
-3. **异常判断**：是否存在价格跳空、spread > 2 USDT 等市场异常？是否应整体重建网格而非简单补单？
-4. **撤单决策**：`far_orders` 中偏离 >100 USDT 的订单，原则上全部撤销。
-5. **历史盈亏优化**：参考 `analyze_history.py` 输出的 `trend_performance_7d` 和 `recommendation`。若某类趋势近期持续亏损，AI 可决定降低该类行情下的开仓数量、加大 gap 或直接跳过。
-6. **最终决策**：综合以上五点，给出最终结论：**执行补单 / 仅撤销远单 / 本次跳过**，并说明理由。
+2. **流动性检查**：若 `spread > 2` 且 `bidSz < 10` 与 `askSz < 10` 同时成立，说明流动性枯竭，应直接暂停交易并通知用户。
+3. **撤单决策**：`far_orders` 中偏离 >100 USDT 的订单，原则上全部撤销。
+4. **最终决策**：综合脚本建议与以上检查，给出结论：**执行补单 / 仅撤销远单 / 本次跳过 / 降低仓位**，并说明理由。
 
-若决策为 **执行补单**，先调用 `calc_plan.py` 生成**建议草案**：
+若决策为 **执行补单**，调用 `calc_plan.py` 生成**建议草案**：
 ```powershell
 python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_plan.py" `
   "$env:TEMP\market.json" `
@@ -148,6 +170,8 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_plan.py" `
 ```
 
 AI 必须基于以下数据对草案进行**审核、修改或否决**：
+
+`calc_plan.py` 输出的 `reasoning` 字段会解释每侧的价格是如何选出的（内扩/外扩/从零建仓、哪些候选因何被拒绝），AI 应优先阅读该字段以理解草案意图，再进行以下复核：
 
 1. **价格布局是否合理**
    - `calc_plan.py` 已自动生成**内扩**和**外扩**候选方案，并优先选择离当前价最近的有效位置。
