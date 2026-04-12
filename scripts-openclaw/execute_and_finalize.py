@@ -11,7 +11,7 @@ import subprocess
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from config import ENV_FILE, LOG_PATH, JSONL_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready
+from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready
 import base64, hmac, hashlib
 
 
@@ -150,6 +150,109 @@ def write_stop_counter(value):
 
 
 # --- Logging helpers ---
+def _calc_daily_pnl(bills_data):
+    if not isinstance(bills_data, dict) or bills_data.get("code") != "0":
+        return None
+    total = 0.0
+    for r in bills_data.get("data", []):
+        if r.get("instId") != "ETH-USDT-SWAP":
+            continue
+        try:
+            sub = int(r.get("subType", -1))
+        except (ValueError, TypeError):
+            continue
+        if sub in {4, 6, 110, 111, 112}:
+            total += float(r.get("pnl", "0") or "0")
+    return round(total, 4)
+
+
+def _read_last_open_decision():
+    if not os.path.exists(DECISION_LOG_PATH):
+        return None
+    last_open = None
+    with open(DECISION_LOG_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if "outcome_pnl" not in entry:
+                    last_open = entry
+            except json.JSONDecodeError:
+                continue
+    return last_open
+
+
+def _update_decision_outcome(decision_id, outcome_pnl, exit_price):
+    if not os.path.exists(DECISION_LOG_PATH):
+        return False
+    lines = []
+    updated = False
+    with open(DECISION_LOG_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if entry.get("decision_id") == decision_id and "outcome_pnl" not in entry:
+                    entry["outcome_pnl"] = outcome_pnl
+                    entry["exit_price"] = exit_price
+                    entry["closed_at"] = iso_now()
+                    updated = True
+                lines.append(json.dumps(entry, ensure_ascii=False))
+            except json.JSONDecodeError:
+                lines.append(line)
+    if updated:
+        with open(DECISION_LOG_PATH, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    return updated
+
+
+def _append_decision(plan, summary, daily_pnl):
+    os.makedirs(os.path.dirname(DECISION_LOG_PATH), exist_ok=True)
+    reasoning = plan.get("reasoning", {})
+    long_prices = []
+    short_prices = []
+    long_expansion = ""
+    short_expansion = ""
+    for p in plan.get("placements", []):
+        if p.get("side") == "buy" and p.get("posSide") == "long":
+            long_prices.append(p.get("px"))
+        elif p.get("side") == "sell" and p.get("posSide") == "short":
+            short_prices.append(p.get("px"))
+    long_expansion = reasoning.get("long", {}).get("expansion_type", "")
+    short_expansion = reasoning.get("short", {}).get("expansion_type", "")
+    entry = {
+        "decision_id": iso_now().replace(":", "").replace("-", "").replace(".", "") + "_" + str(os.getpid()),
+        "timestamp": iso_now(),
+        "market_state": {
+            "trend": summary.get("trend", ""),
+            "price": summary.get("price", ""),
+            "volatility_1h": summary.get("volatility_1h", ""),
+        },
+        "strategy_params": {
+            "gap": summary.get("gap", ""),
+            "target_long": reasoning.get("long", {}).get("target"),
+            "target_short": reasoning.get("short", {}).get("target"),
+        },
+        "actual_actions": {
+            "cancellations_count": len(plan.get("cancellations", [])),
+            "placements_count": len(plan.get("placements", [])),
+            "long_prices": long_prices,
+            "short_prices": short_prices,
+            "long_expansion": long_expansion,
+            "short_expansion": short_expansion,
+        },
+        "baseline_pnl": daily_pnl,
+        "decision_source": os.environ.get("TOMOKX_DECISION_SOURCE", "ai_manual"),
+    }
+    with open(DECISION_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry["decision_id"]
+
+
 def log_trade(summary, gap="", high24h="", low24h="", short_orders="", long_orders=""):
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     trend = summary.get("trend", "unknown")
@@ -220,6 +323,21 @@ def main():
         "log": "",
     }
 
+    # 0. Fetch bills for PnL baseline and close previous decision
+    bills = run_bills()
+    daily_pnl = None
+    if "error" not in bills:
+        daily_pnl = _calc_daily_pnl(bills)
+        last_open = _read_last_open_decision()
+        if last_open and daily_pnl is not None:
+            baseline = last_open.get("baseline_pnl", 0)
+            outcome = round(daily_pnl - baseline, 4)
+            price = summary.get("price")
+            _update_decision_outcome(last_open["decision_id"], outcome, price)
+            print(f"[DECISION_LOG] Closed {last_open['decision_id']} with outcome_pnl={outcome}")
+    else:
+        print(f"[BILLS] ERROR: {bills['error']}")
+
     # 1. Execute orders
     for item in plan.get("cancellations", []):
         inst_id = item.get("instId", "ETH-USDT-SWAP")
@@ -248,8 +366,7 @@ def main():
             result["execution"]["placements"][-1]["retry_result"] = out
             print(f"[RETRY] {side}+{pos_side} @ {px} -> {out}")
 
-    # 2. Update stop counter
-    bills = run_bills()
+    # 2. Update stop counter (reuse bills)
     if "error" not in bills:
         losing = count_losing_closes(bills)
         current = read_stop_counter()
@@ -270,6 +387,11 @@ def main():
     log_msg = log_trade(summary)
     result["log"] = log_msg
     print(f"[LOG] {log_msg}")
+
+    # 4. Log decision
+    if daily_pnl is not None:
+        did = _append_decision(plan, summary, daily_pnl)
+        print(f"[DECISION_LOG] Appended {did}")
 
     print("\n" + json.dumps(result, indent=2))
 

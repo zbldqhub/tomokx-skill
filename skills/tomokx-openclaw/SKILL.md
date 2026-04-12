@@ -194,6 +194,57 @@ python3 ~/.openclaw/workspace/scripts/execute_and_finalize.py /tmp/tomokx_plan.j
 
 ---
 
+## Learning & Optimization
+
+### Decision Log
+
+每次执行 `execute_and_finalize.py` 后，系统会自动在 `~/.openclaw/workspace/decisions.jsonl` 写入一条决策记录，包含：
+- `market_state`: 趋势、价格、波动率
+- `strategy_params`: gap、target_long、target_short
+- `actual_actions`: 实际撤销/新建数量、long/short 价格、expansion_type
+- `baseline_pnl`: 决策时刻的当日已实现盈亏
+- `outcome_pnl`: 下次执行时回填的盈亏 delta（当前 daily_pnl - baseline_pnl）
+
+### 分析历史决策
+
+每周（或积累 20+ 条闭合记录后）运行一次：
+```bash
+python3 ~/.openclaw/workspace/scripts/analyze_decisions.py
+```
+
+输出示例：
+```json
+{
+  "total_decisions": 42,
+  "closed_decisions": 38,
+  "top_performers": [
+    {
+      "trend": "bullish",
+      "gap": "14",
+      "target_long": 0,
+      "target_short": 1,
+      "long_expansion": "",
+      "short_expansion": "inner",
+      "count": 5,
+      "avg_pnl": 0.89,
+      "win_rate": 0.8
+    }
+  ],
+  "gap_comparison": {
+    "14": {"count": 15, "avg_pnl": 0.42, "win_rate": 0.67},
+    "12": {"count": 12, "avg_pnl": -0.18, "win_rate": 0.42}
+  },
+  "recommendations": [
+    "Best performing setup: trend=bullish gap=14 targets=(0,1) avg_pnl=0.89 win_rate=0.8",
+    "Best gap value so far: 14 (avg_pnl=0.42, n=15)"
+  ]
+}
+```
+
+AI 应阅读该报告并结合最新市场状态，判断是否调整 `config.py` 中的 gap 表或默认 target 分配。
+
+---
+
 ## CLI Reference (v1.3.0)
 
 ```bash

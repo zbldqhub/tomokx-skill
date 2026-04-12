@@ -340,6 +340,8 @@ def main():
         "summary": {
             "trend": trend,
             "price": str(current_price),
+            "gap": str(gap),
+            "volatility_1h": str(vol),
             "orders": str(exposure.get("orders_count", 0)),
             "positions": str(exposure.get("positions_count", 0)),
             "total": str(exposure.get("total", 0)),

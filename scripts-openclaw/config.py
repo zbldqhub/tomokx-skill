@@ -11,6 +11,7 @@ WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
 ENV_FILE = os.path.join(WORKSPACE, ".env.trading")
 LOG_PATH = os.path.join(WORKSPACE, "auto_trade.log")
 JSONL_PATH = os.path.join(WORKSPACE, "auto_trade.jsonl")
+DECISION_LOG_PATH = os.path.join(WORKSPACE, "decisions.jsonl")
 STOP_FILE = os.path.join(WORKSPACE, ".trading_stopped")
 
 # Strategy constants
