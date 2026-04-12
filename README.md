@@ -284,6 +284,7 @@ tomokx-skill/
 │   ├── env-check.ps1
 │   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
 │   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
+│   ├── log_trade.py             # 交易日志自动写入
 │   ├── trade_cycle_check.py     # 交易周期诊断（只检查不下单）
 │   ├── patch-okx-cli.js         # 修复 OKX CLI ProxyAgent TLS
 │   ├── hysteria-switcher.py     # (已停用)
@@ -293,6 +294,7 @@ tomokx-skill/
 │   ├── env-check.sh
 │   ├── eth_market_analyzer.py   # 已适配 CLI 1.3.0 --json
 │   ├── get_bills.py             # REST API 账单查询（替代 CLI bills）
+│   ├── log_trade.py             # 交易日志自动写入
 │   ├── okx_account_balance.py   # 账户余额查询
 │   ├── run_analyzer.py          # 快速运行市场分析
 │   ├── run_balance.py           # 快速运行余额查询

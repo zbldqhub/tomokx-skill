@@ -110,6 +110,19 @@ okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordT
 **Step 8.5:** Run `get_bills.py --today`. Filter `subType ∈ {4,6,110,111,112}` and `pnl < 0`. Increment `.trading_stopped` for each. If count reaches ≥ 3 → stop.
 
 **Step 10:** Log and notify.
+
+First, write the log via script:
+```bash
+python3 ~/.openclaw/workspace/scripts/log_trade.py \
+  --trend "<trend>" \
+  --price "<price>" \
+  --orders "<orders>" \
+  --positions "<positions>" \
+  --total "<total>" \
+  --actions "<actions>"
+```
+
+Then notify with:
 ```
 📊 ETH Trader 执行完成
 趋势: <trend> | 价格: <price> | 挂单: <orders>/20 | 持仓: <positions> | 总暴露: <total>/20
