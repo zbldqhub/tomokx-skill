@@ -5,13 +5,12 @@
 ## 🌟 核心特性
 
 - 🤖 **Agent 原生执行**: 所有交易逻辑由 Agent 逐步执行，非脚本自动化
-- 📊 **智能网格策略**: 动态价格间隔（5-14 USDT），根据仓位和波动率调整
+- 📊 **智能网格策略**: 动态价格间隔（3-12 USDT），根据仓位和波动率调整
 - 📈 **多时间框架趋势分析**: 结合 1h 和 24h 数据判断趋势
 - 🛡️ **多重风控**: 
-  - 连续止损 3 次自动暂停
   - 日亏损限制 40 USDT
-  - 最大 20 张总仓位
-  - 价格偏离 >60 USDT 自动取消
+  - 最大 30 张总仓位
+  - 价格偏离 >100 USDT 自动取消
 - 🔔 **实时通知**: 每次执行后自动发送执行摘要
 - 🌐 **智能代理切换**: 12 个代理节点自动故障转移
 
@@ -61,8 +60,8 @@ export SS_PASSWORD="your-shadowsocks-password"
 # ============================================
 # 交易参数（可选，使用默认值可省略）
 # ============================================
-export MAX_ORDERS=20        # 最大挂单数
-export MAX_TOTAL=20         # 最大总仓位（挂单+持仓）
+export MAX_ORDERS=30        # 最大挂单数
+export MAX_TOTAL=30         # 最大总仓位（挂单+持仓）
 export ORDER_SIZE=0.1       # 每张订单合约数
 export LEVERAGE=10          # 杠杆倍数
 export DAILY_LOSS_LIMIT=40  # 日亏损限制（USDT）
@@ -103,16 +102,15 @@ python3 ~/.openclaw/workspace/scripts/hysteria-switcher.py
 
 | 总仓位 | 间隔 (USDT) |
 |--------|------------|
-| 0 | 5 |
-| 1 | 6 |
-| 2 | 7 |
-| 3 | 8 |
-| 4 | 9 |
-| 5 | 10 |
-| 6 | 10 |
-| 7-10 | 11 |
-| 11-15 | 12 |
-| 16-20 | 14 |
+| 0 | 3 |
+| 1 | 4 |
+| 2 | 5 |
+| 3 | 6 |
+| 4 | 7 |
+| 5-6 | 8 |
+| 7-10 | 9 |
+| 11-15 | 10 |
+| 16-30 | 12 |
 
 **间隔调整因子:**
 - 高波动 (ATR > 5): +20%
@@ -123,20 +121,19 @@ python3 ~/.openclaw/workspace/scripts/hysteria-switcher.py
 
 | 参数 | 值 | 说明 |
 |-----|---|------|
-| 最大挂单 | 20 | 同时存在的限价单 |
-| 最大总仓位 | 20 | 挂单 + 持仓 |
-| 取消阈值 | 60 USDT | 价格偏离超过此值取消 |
-| 连续止损 | 3 次 | 触发暂停 |
+| 最大挂单 | 30 | 同时存在的限价单 |
+| 最大总仓位 | 30 | 挂单 + 持仓 |
+| 单侧最大挂单 | 6 | 每方向最多 6 张 |
+| 取消阈值 | 100 USDT | 价格偏离超过此值取消 |
 | 日亏损限制 | 40 USDT | 触发停止 |
 | 单次下单 | 0.1 张 | 约 2 USDT 保证金 |
 | 杠杆 | 10x | 逐仓模式 |
-| 每周期最大下单 | 5 张 | 防止过度交易 |
 
 ## 🎯 执行流程
 
 ```
 Step 0: 环境设置 → 加载配置 + 代理检查
-Step 1: 交易状态检查 → 止损计数 + 日亏损检查
+Step 1: 交易状态检查 → 日亏损检查（唯一风控停机条件）
 Step 1.5: 市场快照 → 聚合所有数据
 Step 2: 市场数据分析 → 趋势判断
 Step 3: 检查当前挂单
@@ -144,8 +141,8 @@ Step 4: 检查当前持仓
 Step 5: 计算总仓位
 Step 6: 取消远离订单
 Step 7: 确定目标分布
-Step 8: 管理订单 → 开新单/补单
-Step 9: 计算 TP/SL
+Step 8: 管理订单 → 开新单/补单（per-side ≤ 6，total ≤ 30）
+Step 9: 计算 TP/SL（止盈更紧凑，止损保持宽松）
 Step 10: 日志记录 + 通知
 ```
 
@@ -160,11 +157,7 @@ Step 10: 日志记录 + 通知
 "生成日报" / "generate daily report"
 ```
 
-### 重置计数器
-```bash
-# 重置止损计数（交易暂停后）
-echo 0 > ~/.openclaw/workspace/.trading_stopped
-```
+
 
 ### 手动检查
 ```bash
@@ -226,14 +219,7 @@ source ~/.openclaw/workspace/.env.trading
 proxychains4 -f /etc/proxychains.conf okx swap orders
 ```
 
-### 交易暂停
-```bash
-# 检查止损计数
-cat ~/.openclaw/workspace/.trading_stopped
 
-# 重置
-echo 0 > ~/.openclaw/workspace/.trading_stopped
-```
 
 ### 日亏损限制
 - 检查日志: `tail ~/.openclaw/workspace/auto_trade.log`
