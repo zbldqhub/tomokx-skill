@@ -296,6 +296,10 @@ tomokx-skill/
 
 ## 📝 近期更新
 
+### v2.3.1 (2026-04-14)
+- **修复硬编码暴露上限**: `calc_recommendation.py`、`execute_and_finalize.py` 中总暴露字符串的 `/20` 改为引用 `config.MAX_TOTAL`，确保日志与建议理由随配置同步
+- **同步根目录配置**: `scripts/config.py` 与 `scripts-openclaw/config.py` 的 `MAX_TOTAL` 统一为 `30`，`MAX_PER_SIDE` 统一为 `6`
+
 ### v2.3.0 (2026-04-13)
 - **调整总暴露与单侧上限**: 20 -> 30 张总仓位，单侧 4 -> 6 张
 - **压缩网格间距**: base gap 从 5-14 调整为 3-12 USDT
