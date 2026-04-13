@@ -11,15 +11,15 @@ def load_json(path):
 
 def calc_tp_sl_offset(volatility_1h):
     if volatility_1h < 5:
-        return 12, 85
+        return 6, 85
     elif volatility_1h < 10:
-        return 20, 90
+        return 10, 90
     elif volatility_1h < 15:
-        return 28, 98
+        return 15, 98
     elif volatility_1h < 25:
-        return 38, 108
+        return 22, 108
     else:
-        return 45, 115
+        return 28, 115
 
 
 def get_existing_prices(orders_data, side, pos_side, far_ord_ids):

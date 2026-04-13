@@ -16,8 +16,8 @@ ORDER_TRACKING_PATH = os.path.join(WORKSPACE, "order_tracking.jsonl")
 STOP_FILE = os.path.join(WORKSPACE, ".trading_stopped")
 
 # Strategy constants
-MAX_TOTAL = 20
-MAX_PER_SIDE = 4
+MAX_TOTAL = 30
+MAX_PER_SIDE = 6
 ORDER_SIZE = 0.1
 LEVERAGE = 10
 DAILY_LOSS_LIMIT = -40
@@ -27,36 +27,36 @@ DISTANCE_CAP = 80
 # Gap table by total exposure
 def base_gap(total):
     if total <= 0:
-        return 5
+        return 3
     elif total == 1:
-        return 6
+        return 4
     elif total == 2:
-        return 7
+        return 5
     elif total == 3:
-        return 8
+        return 6
     elif total == 4:
-        return 9
+        return 7
     elif total <= 6:
-        return 10
+        return 8
     elif total <= 10:
-        return 11
+        return 9
     elif total <= 15:
-        return 12
+        return 10
     else:
-        return 14
+        return 12
 
 
 def calc_tp_sl_offset(volatility_1h):
     if volatility_1h < 5:
-        return 12, 85
+        return 6, 85
     elif volatility_1h < 10:
-        return 20, 90
+        return 10, 90
     elif volatility_1h < 15:
-        return 28, 98
+        return 15, 98
     elif volatility_1h < 25:
-        return 38, 108
+        return 22, 108
     else:
-        return 45, 115
+        return 28, 115
 
 
 def load_env():

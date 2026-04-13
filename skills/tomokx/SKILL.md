@@ -14,11 +14,10 @@ ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
 ## Core Strategy
 
 - **Pure opening grid**: Only `buy+long` and `sell+short`. Closing is handled by per-order TP/SL.
-- **Max exposure**: 20 units total (`orders + positions`).
-- **Per-side max**: 4 live orders per side.
+- **Max exposure**: 30 units total (`orders + positions`).
+- **Per-side max**: 6 live orders per side.
 - **Cancel threshold**: Orders > 100 USDT from current price are cancelled.
 - **Daily loss limit**: Net realized P&L < -40 USDT for ETH-USDT-SWAP → stop.
-- **Stop-loss counter**: 3 consecutive losing closes (subType 4/6/110/111/112 with pnl<0) → stop.
 
 `$WORKSPACE` = `C:\Users\ldq\.openclaw\workspace`
 
@@ -34,15 +33,15 @@ ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
 
 | Total Positions | Gap |
 | --------------- | --- |
-| 0               | 5   |
-| 1               | 6   |
-| 2               | 7   |
-| 3               | 8   |
-| 4               | 9   |
-| 5-6             | 10  |
-| 7-10            | 11  |
-| 11-15           | 12  |
-| 16-20           | 14  |
+| 0               | 3   |
+| 1               | 4   |
+| 2               | 5   |
+| 3               | 6   |
+| 4               | 7   |
+| 5-6             | 8   |
+| 7-10            | 9   |
+| 11-15           | 10  |
+| 16-30           | 12  |
 
 **Gap adjustments:** volatility > 15 → +2~4; > 25 → +4~6 or pause. Spread > 0.5 → +1.
 
@@ -133,7 +132,7 @@ AI 必须基于以下数据对草案进行**审核、修改或否决**：
    - `volatility_1h` 处于边界值或存在特殊风险时，AI 可调整 `tpTriggerPx` 和 `slTriggerPx`。
 
 4. **数量是否正确**
-   - per-side 是否超过 4？总暴露是否会超过 20？剩余容量是否足够？
+   - per-side 是否超过 6？总暴露是否会超过 30？剩余容量是否足够？
    - 若草案计算有误，AI 可直接删减订单。
 
 5. **前置验证（逐单检查）**
@@ -185,7 +184,7 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_and_finalize.py" ($
 - 若输出中出现 **余额不足 / 价格已失效** 等错误：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划（减少数量或调整价格），再次执行 `execute_and_finalize.py`。
 - 若出现 **Rate limit (429)**：脚本内部等待 10 秒后自动重试一次。
 - 若出现 **其他错误**：脚本内部跳过该单，记录原因到日志，继续执行剩余订单。
-- 若 `stop_counter` 输出 `should_stop` 为 true，脚本以退出码 2 结束，应立即停止并通知用户。
+
 
 ---
 
@@ -215,7 +214,7 @@ node $WORKSPACE/scripts/patch-okx-cli.js
 
 ## Quick Commands
 
-- **Reset stop counter:** `echo 0 > $WORKSPACE/.trading_stopped`
+
 - **Env check (PowerShell):** `$WORKSPACE/scripts/env-check.ps1`
 - **Env check (Git Bash):** `bash $WORKSPACE/scripts/env-check.sh`
 - **Cycle diagnostic:** `python $WORKSPACE/scripts/trade_cycle_check.py`

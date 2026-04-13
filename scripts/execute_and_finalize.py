@@ -11,7 +11,7 @@ import subprocess
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, ORDER_TRACKING_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready
+from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, ORDER_TRACKING_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready, MAX_TOTAL
 import base64, hmac, hashlib
 
 
@@ -301,7 +301,7 @@ def log_trade(summary, gap="", high24h="", low24h="", short_orders="", long_orde
         f"- Current Price: {price} USDT\n"
         f"- Orders: {orders} live\n"
         f"- Positions: {positions} open\n"
-        f"- Total Exposure: {total}/20\n"
+        f"- Total Exposure: {total}/{MAX_TOTAL}\n"
         f"- Actions: {actions}\n"
     )
 
@@ -414,22 +414,7 @@ def main():
         _append_order_tracking(plan, decision_id)
         print("[ORDER_TRACKING] Appended placements")
 
-    # 4. Update stop counter (reuse bills)
-    if "error" not in bills:
-        losing = count_losing_closes(bills)
-        current = read_stop_counter()
-        new_value = max(current, losing)
-        write_stop_counter(new_value)
-        result["stop_counter"] = {
-            "previous": current,
-            "losing_closes_today": losing,
-            "written": new_value,
-            "should_stop": new_value >= 3,
-        }
-        print(f"[STOP_COUNTER] updated to {new_value}")
-    else:
-        result["stop_counter"] = {"error": bills["error"]}
-        print(f"[STOP_COUNTER] ERROR: {bills['error']}")
+    # 4. Stop counter disabled; only daily loss limit is enforced
 
     # 5. Log trade
     log_msg = log_trade(summary)
@@ -439,8 +424,7 @@ def main():
     print("\n" + json.dumps(result, indent=2))
 
     # Exit with non-zero if stop counter triggered, so caller can halt
-    if result.get("stop_counter", {}).get("should_stop"):
-        sys.exit(2)
+
 
 
 if __name__ == "__main__":

@@ -284,10 +284,7 @@ def build_risk():
     risk_vals = _calc_risk(bills)
     should_stop = False
     reason = ""
-    if stopped >= 3:
-        should_stop = True
-        reason = f"Consecutive stop-loss limit reached ({stopped} >= 3)"
-    elif risk_vals["daily_pnl"] < DAILY_LOSS_LIMIT:
+    if risk_vals["daily_pnl"] < DAILY_LOSS_LIMIT:
         should_stop = True
         reason = f"Daily loss limit exceeded ({risk_vals['daily_pnl']} USDT)"
 
@@ -484,6 +481,23 @@ def main():
             "exposure": {"elapsed_ms": exposure_elapsed, "error": ""},
         },
     }
+
+    # Write intermediate files for downstream scripts
+    _tmp_files = {
+        "/tmp/market.json": market,
+        "/tmp/exposure.json": exposure,
+        "/tmp/strategy.json": strategy,
+        "/tmp/orders.json": orders,
+        "/tmp/far_orders.json": {"far_orders": far_orders, "threshold": CANCEL_THRESHOLD, "current_price": current_price},
+        "/tmp/history.json": history,
+    }
+    for _path, _data in _tmp_files.items():
+        try:
+            with open(_path, "w", encoding="utf-8") as _f:
+                json.dump(_data, _f, indent=2, ensure_ascii=False)
+        except Exception as _e:
+            sys.stderr.write(f"Warning: failed to write {_path}: {_e}\n")
+
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

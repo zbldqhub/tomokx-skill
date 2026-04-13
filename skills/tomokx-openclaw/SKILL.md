@@ -16,11 +16,10 @@ ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
 ## Core Strategy
 
 - **Pure opening grid**: Only `buy+long` and `sell+short`. Closing is handled by per-order TP/SL.
-- **Max exposure**: 20 units total (`orders + positions`).
-- **Per-side max**: 4 live orders per side.
+- **Max exposure**: 30 units total (`orders + positions`).
+- **Per-side max**: 6 live orders per side.
 - **Cancel threshold**: Orders > 100 USDT from current price are cancelled.
 - **Daily loss limit**: Net realized P&L < -40 USDT for ETH-USDT-SWAP → stop.
-- **Stop-loss counter**: 3 consecutive losing closes (subType 4/6/110/111/112 with pnl<0) → stop.
 
 ### Trend Targets
 
@@ -51,15 +50,15 @@ ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
 
 | Total Positions | Gap |
 | --------------- | --- |
-| 0               | 5   |
-| 1               | 6   |
-| 2               | 7   |
-| 3               | 8   |
-| 4               | 9   |
-| 5-6             | 10  |
-| 7-10            | 11  |
-| 11-15           | 12  |
-| 16-20           | 14  |
+| 0               | 3   |
+| 1               | 4   |
+| 2               | 5   |
+| 3               | 6   |
+| 4               | 7   |
+| 5-6             | 8   |
+| 7-10            | 9   |
+| 11-15           | 10  |
+| 16-30           | 12  |
 
 **Gap adjustments:** volatility > 15 → +2~4; > 25 → +4~6 or pause. Spread > 0.5 → +1.
 
@@ -163,7 +162,7 @@ AI 必须基于以下数据对草案进行**审核、修改或否决**：
 | **gap 是否需要动态调整** | 单侧严重失衡或市场异常时，AI 可增大/减小特定订单的间距 | 直接修改 `px` |
 | **TP/SL 是否合理** | `volatility_1h` 边界或特殊风险时调整 | 直接修改 `tpTriggerPx` / `slTriggerPx` |
 | **前置验证** | Long: `tp > px`, `sl < px`<br>Short: `tp < px`, `sl > px` | 未通过则修改参数或 **删除** |
-| **总暴露上限** | 补单后 `total <= 20`，per-side <= 4 | 删减订单 |
+| **总暴露上限** | 补单后 `total <= 30`，per-side <= 6 | 删减订单 |
 
 ### 典型场景的默认决策
 - **重侧内扩 + 轻侧内扩** → 两单都保留（结构合理）
@@ -215,7 +214,7 @@ python3 ~/.openclaw/workspace/scripts/execute_and_finalize.py /tmp/tomokx_plan.j
 - 若输出中出现 **余额不足 / 价格已失效** 等错误：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划（减少数量或调整价格），再次执行 `execute_and_finalize.py`。
 - 若出现 **Rate limit (429)**：脚本内部等待 10 秒后自动重试一次。
 - 若出现 **其他错误**：脚本内部跳过该单，记录原因到日志，继续执行剩余订单。
-- 若 `stop_counter` 输出 `should_stop` 为 true，脚本以退出码 2 结束，应立即停止并通知用户。
+
 
 ---
 
@@ -341,7 +340,7 @@ okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordT
 
 ## Quick Commands
 
-- **Reset stop counter:** `echo 0 > ~/.openclaw/workspace/.trading_stopped`
+
 - **Env check:** `bash ~/.openclaw/workspace/scripts/env-check.sh`
 - **Cycle diagnostic:** `python3 ~/.openclaw/workspace/scripts/trade_cycle_check.py`
 

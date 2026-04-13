@@ -7,6 +7,8 @@ outputs a structured recommendation with confidence score and reasoning.
 import json
 import sys
 
+from config import MAX_TOTAL
+
 # Force UTF-8 stdout on Windows to avoid GBK encode errors for CJK characters
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -128,12 +130,12 @@ def main():
     if total >= 18:
         confidence -= 0.15
         risk_flags.append("high_exposure")
-        reasons.append(f"总暴露接近上限 ({total}/20)，建议仅补极优位置")
+        reasons.append(f"总暴露接近上限 ({total}/{MAX_TOTAL})，建议仅补极优位置")
         if recommendation == "proceed":
             recommendation = "reduce_exposure"
     elif total >= 14:
         confidence -= 0.05
-        reasons.append(f"总暴露较高 ({total}/20)，谨慎开仓")
+        reasons.append(f"总暴露较高 ({total}/{MAX_TOTAL})，谨慎开仓")
 
     if remaining <= 0:
         recommendation = "cancel_only"
@@ -148,7 +150,7 @@ def main():
 
     # --- Finalize ---
     if not reasons:
-        reasons.append(f"{trend} 趋势确认，暴露 {total}/20，imbalance={imbalance}，建议正常执行")
+        reasons.append(f"{trend} 趋势确认，暴露 {total}/{MAX_TOTAL}，imbalance={imbalance}，建议正常执行")
 
     confidence = round(max(0.1, min(0.99, confidence)), 2)
 
