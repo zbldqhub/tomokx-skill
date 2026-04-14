@@ -13,20 +13,21 @@
   - 最大 30 张总仓位
   - 单侧最多 6 张 live 订单
   - 价格偏离 >100 USDT 自动取消
-- 🧠 **自我学习系统**: 每次决策和每个订单的生命周期都会被记录，支持数据驱动的策略优化
+- 🧠 **自我学习系统**: 每次决策和每个订单的生命周期都会被记录，AI 每周读取报告后可自主微调策略参数（gap 表、target 分配）
 - 🖥️ **双平台支持**: Windows 手动版 + Linux/openclaw 定时版
-- 🔗 **系统 Skill 集成**: `tomokx` / `tomokx-openclaw` 已注册为 Agent 系统 Skill
+- 🔗 **系统 Skill 集成**: `tomokx` / `tomokx-openclaw` 已注册为 Agent 系统 Skill，且两套 SKILL 内容已统一
 
 ## 📦 版本说明
 
-本项目包含两个独立版本：
+本项目技能文档已统一：
 
 | 版本 | 路径 | 适用场景 | 调度方式 |
 |------|------|---------|----------|
 | **Windows 手动版** | `skills/tomokx/` | 本地 Windows 开发/测试 | 手动触发 |
 | **Linux/openclaw 版** | `skills/tomokx-openclaw/` | 服务器/Linux 定时运行 | crontab / 每 30 分钟 |
 
-> **注意**: 代理自动切换逻辑（`hysteria-switcher.py`、`proxy-switcher.py`）已被移除，当前版本依赖系统级网络连通性。
+> **注意**: 两个版本的 `SKILL.md` 已合并为统一策略 V2.0，核心规则（趋势判定、AI 决策边界、逐单 Checklist、调参权限）完全一致。
+> 代理自动切换逻辑（`hysteria-switcher.py`、`proxy-switcher.py`）已被移除，当前版本依赖系统级网络连通性。
 
 ---
 
@@ -150,7 +151,7 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 - `volatility_1h` < 8: 可减 1–2
 - `volatility_1h` 8–15: 使用 base gap
 - `volatility_1h` > 15: +2–4
-- `volatility_1h` > 25: 再增或暂停
+- `volatility_1h` > 25: 再增或 pause
 
 ### 关键规则
 
@@ -177,9 +178,10 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 
 ```
 Step 1+2: 并发数据采集 → 市场/订单/持仓/风险/历史一次性拉取
-Step 3a:  AI 决策参考  → calc_recommendation.py 提供量化建议
-Step 3b:  生成交易草案 → calc_plan.py 基于策略生成 placements + reasoning
-Step 3c:  AI 审核决策  → 阅读 reasoning，修改或否决草案
+Step 3a:  典型场景默认决策 → 最高优先级规则（重侧外扩删除等）
+Step 3b:  AI 决策参考  → calc_recommendation.py 提供量化建议
+Step 3c:  生成交易草案 → calc_plan.py 基于策略生成 placements + reasoning
+Step 3d:  AI 审核决策  → 逐单 Checklist，修改或否决草案
 Step 4:   执行交易计划 → execute_and_finalize.py 统一执行撤单/下单/日志/学习记录
 ```
 
@@ -212,6 +214,13 @@ python3 ~/.openclaw/workspace/scripts/analyze_decisions.py
 # 细粒度：订单级真实盈亏与胜率
 python3 ~/.openclaw/workspace/scripts/analyze_trades.py
 ```
+
+**AI 调参安全边界**:
+- **可调参数**：`base_gap_table`、`volatility_*_boost` 阈值、`trend_targets`
+- **禁止触碰**：`max_total`、`daily_loss_limit`、`per-side max`、`cancel_threshold`
+- **调整幅度**：单次变动 **≤ ±2**
+- **调参频率**：**≥ 7 天一次**
+- **必须记录**：任何修改都要写入 `~/.openclaw/workspace/tuning_log.jsonl`
 
 **示例输出**：
 ```json
@@ -261,17 +270,17 @@ python3 ~/.openclaw/workspace/scripts/analyze_trades.py
 ## 📁 项目结构
 
 ```
-tomokx-skill/
+tomokx/
 ├── skills/
-│   ├── tomokx/                  # Windows 手动版
+│   ├── tomokx/                  # Windows 手动版（与 openclaw 版已统一）
 │   │   └── SKILL.md
 │   └── tomokx-openclaw/         # Linux / openclaw 定时版
 │       └── SKILL.md
 ├── scripts/                      # Windows 配套脚本
 │   ├── config.py                # 统一配置 + 策略常量
 │   ├── fetch_all_data.py        # 并发数据采集 (Step 1+2)
-│   ├── calc_recommendation.py   # AI 决策参考 (Step 3a)
-│   ├── calc_plan.py             # 交易草案生成 (Step 3b)
+│   ├── calc_recommendation.py   # AI 决策参考 (Step 3b)
+│   ├── calc_plan.py             # 交易草案生成 (Step 3c)
 │   ├── calc_strategy.py         # 策略参数计算
 │   ├── execute_and_finalize.py  # 统一执行 + 日志 + 学习记录 (Step 4)
 │   ├── analyze_history.py       # 近期历史盈亏分析
@@ -296,8 +305,17 @@ tomokx-skill/
 
 ## 📝 近期更新
 
+### v2.4.0 (2026-04-14)
+- **统一两套 SKILL.md**: `tomokx` 与 `tomokx-openclaw` 合并为统一策略 V2.0，内容完全一致
+- **新增 AI 决策边界**: 明确 AI 为"审核员与仲裁者"，前置"默认决策"和"禁止事项"
+- **新增逐单复核 Checklist**: 8 项前置检查，防止 TP 贴当前价、重侧外扩等硬伤
+- **恢复 AI 调参权**: 每周读取报告后，AI 可在安全边界内自主微调 `config.py`
+- **删除重复代码目录**: 移除 `tomokx-skill/` 子目录下的过时副本，统一以根目录为 source of truth
+- **修复 CRLF 换行符**: `.sh` 脚本全部转换为 LF，确保 Linux/openclaw 环境可正常执行
+- **同步 workspace 脚本**: 根目录最新脚本已覆盖到 `~/.openclaw/workspace/scripts/`
+
 ### v2.3.1 (2026-04-14)
-- **修复硬编码暴露上限**: `calc_recommendation.py`、`execute_and_finalize.py` 中总暴露字符串的 `/20` 改为引用 `config.MAX_TOTAL`，确保日志与建议理由随配置同步
+- **修复硬编码暴露上限**: `calc_recommendation.py`、`execute_and_finalize.py` 中总暴露字符串的 `/20` 改为引用 `config.MAX_TOTAL`
 - **同步根目录配置**: `scripts/config.py` 与 `scripts-openclaw/config.py` 的 `MAX_TOTAL` 统一为 `30`，`MAX_PER_SIDE` 统一为 `6`
 
 ### v2.3.0 (2026-04-13)
@@ -307,21 +325,20 @@ tomokx-skill/
 - **移除连续止损限制**: 取消 3 次止损计数器，仅保留 40 USDT 日亏损上限作为停机条件
 
 ### v2.2.0 (2026-04-12)
-- **新增多时间框架趋势分析**: 4h（主趋势）+ 1h（确认）+ 15m（共振），引入 `trend_alignment`（strong/moderate/mixed/weak）
+- **新增多时间框架趋势分析**: 4h（主趋势）+ 1h（确认）+ 15m（共振），引入 `trend_alignment`
 - **新增 Funding Rate 纠偏**: 根据资金费率动态调整 target 分布
 - **calc_strategy.py 重构**: 基于 4h 主趋势、对齐度压缩 target、funding bias 调整 target 分布
 
 ### v2.1.0 (2026-04-12)
 - **新增自我学习系统**: `decisions.jsonl` + `order_tracking.jsonl` + `analyze_decisions.py` + `analyze_trades.py`
-- **增强 calc_plan.py reasoning**: 新增 `expansion_type`（内扩/外扩）、`target_deviation`、`hole_to_current` 等字段
+- **增强 calc_plan.py reasoning**: 新增 `expansion_type`、`target_deviation`、`hole_to_current` 等字段
 - **完善 AI 决策框架**: SKILL.md 增加结构化决策权重和逐单复核 Checklist
-- **优化 boost 逻辑**: 仅在内扩候选存在或 under-target 时才触发，避免生成无意义的重侧外扩单
-- **统一执行入口**: `execute_and_finalize.py` 取代原来的 `execute_orders.py` + `update_stop_counter.py` + `log_trade.py`
+- **优化 boost 逻辑**: 仅在内扩候选存在或 under-target 时才触发
+- **统一执行入口**: `execute_and_finalize.py` 取代原来的多个分散脚本
 - **并发数据采集**: `fetch_all_data.py` 一次性并发拉取 Step 1+2 的所有数据
 
 ### v2.0.0 (2026-04)
 - **重大架构重构**: 从 20+ 个零散脚本精简为 11 个核心脚本
-- **删除历史脚本**: `trade_cycle_check.py`、`eth_market_analyzer.py`、`run_*.py`、`hysteria-switcher.py`、`proxy-switcher.py` 等
 - **新增 AI 决策支持**: `calc_recommendation.py` 提供 proceed/pause/reduce_exposure 建议
 - **修复 Windows 编码问题**: `calc_recommendation.py` 和 `calc_plan.py` 强制 UTF-8 输出
 
@@ -344,6 +361,9 @@ tomokx-skill/
 ### 日亏损限制
 - 检查日志: `tail ~/.openclaw/workspace/auto_trade.log`
 - 次日自动恢复，或手动重置（不推荐）
+
+### .sh 脚本无法执行
+- 确保脚本为 LF 换行符。已修复，若仍有问题，重新从根目录复制即可
 
 ---
 

@@ -4,7 +4,7 @@ description: "Automated ETH-USDT-SWAP grid trading on OKX. Triggers: start tradi
 ---
 
 # 策略名称
-ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
+ETH-USDT-SWAP 纯开仓网格交易策略 V2.0
 
 # 执行节奏
 手动触发
@@ -21,174 +21,190 @@ ETH-USDT-SWAP 纯开仓网格交易策略 V1.0
 
 `$WORKSPACE` = `C:\Users\ldq\.openclaw\workspace`
 
-### Trend Targets
+---
 
-| 24h Change | Trend    | Long | Short |
-| ---------- | -------- | ---- | ----- |
-| > +2%      | Bullish  | 2    | 1     |
-| < -2%      | Bearish  | 1    | 2     |
-| -2% to +2% | Sideways | 1    | 2     |
+## AI 决策边界（必读）
 
-### Dynamic Gap
+### AI 的任务
+AI **不是交易员**，而是**审核员与仲裁者**：
+1. 读取脚本的量化建议；
+2. 检查是否触发下文的"默认决策"或"禁止事项"；
+3. 若脚本建议与默认决策冲突，**优先执行默认决策**；
+4. 仅在没有现成规则覆盖的边缘 case 中，AI 才可自主判断，且必须在最终输出中写明理由。
 
-| Total Positions | Gap |
-| --------------- | --- |
-| 0               | 3   |
-| 1               | 4   |
-| 2               | 5   |
-| 3               | 6   |
-| 4               | 7   |
-| 5-6             | 8   |
-| 7-10            | 9   |
-| 11-15           | 10  |
-| 16-30           | 12  |
-
-**Gap adjustments:** volatility > 15 → +2~4; > 25 → +4~6 or pause. Spread > 0.5 → +1.
+### AI 禁止事项
+- **禁止**在 `recommendation = pause` 时未经说明理由就强行开仓。
+- **禁止**增加重侧（暴露多的一侧）的外扩订单，除非 `trend_alignment = strong` 且 funding 同向。
+- **禁止**把 TP 设在当前价 ±3 USDT 以内（高波动下会被噪音扫掉）。
+- **禁止**让 AI 修改 `max_total`、`daily_loss_limit`、`per-side max`、`cancel_threshold` 等硬风控参数。
 
 ---
 
-# Step 1~2 · 数据采集
+## 趋势判定
 
-统一调用 `fetch_all_data.py` 一次性并发拉取 Step 1~2 的所有数据：
+由 **4h 主趋势 + 1h 确认 + 15m 共振** 决定：
+
+| 4h | 1h | 15m | 对齐度 | 最终趋势 | Long | Short |
+|----|----|-----|--------|----------|------|-------|
+| bullish | bullish | bullish | strong | Bullish | 2 | 1 |
+| bearish | bearish | bearish | strong | Bearish | 1 | 2 |
+| bullish | bullish | 任意 | moderate | Bullish | 2 | 1 |
+| bearish | bearish | 任意 | moderate | Bearish | 1 | 2 |
+| 其他组合 | - | - | mixed/weak | Sideways | 1 | 1 |
+
+- `strong` / `moderate`：正常执行对应 target
+- `mixed` / `weak`：**两侧 target 各 -1**（最低为 0），降低暴露，等待方向明确
+
+### Funding Rate 纠偏
+- `funding_rate > 0.01%` → `short_favored` → short target +1，long target -1（如有空间）
+- `funding_rate < -0.01%` → `long_favored` → long target +1，short target -1（如有空间）
+- `-0.01% ~ +0.01%` → `neutral`，不影响 target
+
+---
+
+## Dynamic Gap
+
+| Total Positions | Gap |
+| --------------- | --- |
+| 0 | 3 |
+| 1 | 4 |
+| 2 | 5 |
+| 3 | 6 |
+| 4 | 7 |
+| 5-6 | 8 |
+| 7-10 | 9 |
+| 11-15 | 10 |
+| 16-30 | 12 |
+
+**Gap adjustments:**
+- `volatility_1h > 15` → +2~4
+- `volatility_1h > 25` → +4~6 **或 pause**
+- `spread > 0.5` → +1
+
+---
+
+## Step 1~2 · 数据采集
+
+统一调用 `fetch_all_data.py` 一次性并发拉取所有数据：
 ```powershell
 python "$env:USERPROFILE\.openclaw\workspace\scripts\fetch_all_data.py"
 ```
 
-**输出顶层字段：**
-- `market`: 行情数据（`last`, `bidPx`, `askPx`, `spread`, `bidSz`, `askSz`, `change24h_pct`, `trend_1h`, `volatility_1h`）
-- `risk`: 风控状态（`should_stop`, `daily_pnl`, `stopped_count`, `sl_count_today`）
-- `orders`: 原始挂单列表
-- `positions`: 持仓列表
-- `exposure`: 汇总暴露（`total`, `remaining_capacity`, `short_orders`, `long_orders` 等）
-- `strategy`: 策略建议（`trend`, `target_long`, `target_short`, `adjusted_gap`, `imbalance_score`）
-- `far_orders`: 远离订单列表（偏离 >100 USDT）
-- `history`: 近期历史盈亏分析
-- `diagnostics`: 各子任务耗时与错误摘要，便于排查
-
-> **失败处理**：若 `fetch_all_data.py` 输出包含 `error`，AI 应先查看 `diagnostics` 定位失败子任务，再**整体重跑一次**（最多 2 次，间隔 2 秒）。若仍失败，本次跳过并通知用户具体异常。
-
-### 独立脚本参考（调试时可选）
-- `fetch_market.py`：仅获取市场行情
-- `fetch_orders.py` / `fetch_positions.py`：分别获取挂单/持仓
-- `filter_far_orders.py <orders.json> <last_price>`：筛选远单
-- `analyze_history.py`：分析历史盈亏
-- `calc_strategy.py <market.json> <total> [exposure.json]`：单独计算策略建议
+**失败处理**：若输出包含 `error`，先查看 `diagnostics` 定位失败子任务，再整体重跑一次（最多 2 次，间隔 2 秒）。若仍失败，本次跳过并通知用户具体异常。
 
 ---
 
-# Step 3 · AI 综合判断（核心）
+## Step 3 · AI 综合判断（核心）
 
-先调用 `calc_recommendation.py` 获取**量化决策参考**，作为 AI 推理的基线：
+### Step 3a · 典型场景默认决策（最高优先级）
+以下规则**优先于 `calc_plan.py` 的草案**，AI 必须逐条核对：
+
+1. **重侧内扩 + 轻侧内扩** → 两单都保留（结构合理）
+2. **重侧外扩 + 轻侧内扩** → **删除重侧外扩**，保留轻侧内扩
+3. **两侧均为外扩** → 保留更靠近 `current_price` 的一侧内层单，删除远端外扩；若两侧对齐度 `mixed`/`weak`，两侧外扩均可删除
+4. **`trend_alignment` 为 `mixed`/`weak`** → 重侧外扩 **必须删除**；轻侧内扩可保留但需说明理由
+5. **`imbalance_score >= 3` 且是重侧外扩** → **必须删除**
+6. **`recommendation = pause / cancel_only`** → 原则上服从；若你判断可以执行，必须在最终决策中**明确说明理由**
+7. **远单（>100 USDT）** → 原则上全部撤销
+
+### Step 3b · 量化决策基线
+调用 `calc_recommendation.py`：
 ```powershell
 python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_recommendation.py" `
-  "$env:TEMP\market.json" `
-  "$env:TEMP\exposure.json" `
-  "$env:TEMP\strategy.json" `
-  "$env:TEMP\history.json"
+  "$env:TEMP\market.json" "$env:TEMP\exposure.json" `
+  "$env:TEMP\strategy.json" "$env:TEMP\history.json"
 ```
 
-**输出字段：**
-- `recommendation`: `proceed`（正常执行） / `pause`（暂停） / `cancel_only`（仅撤远单） / `reduce_exposure`（降低仓位） / `rebuild`（重建网格）
-- `confidence`: 置信度（0.0~0.99）
-- `reason`: 人类可读的理由汇总
-- `suggested_targets`: 脚本建议的修正后 target_long / target_short
-- `suggested_gap`: 脚本建议的 gap
-- `risk_flags`: 触发的风险标记列表（如 `liquidity_crisis`、`extreme_volatility`、`bad_regime`、`severe_imbalance`）
-- `historical_context`: 当前趋势的历史胜率、盈亏、回撤等
+阅读其输出的 `recommendation`、`confidence`、`suggested_targets`、`suggested_gap`、`risk_flags`。
 
-> **AI 的任务不是从零推理，而是审核并决策**：
-> 1. 阅读 `calc_recommendation.py` 的建议；
-> 2. 结合你自己的判断：同意、修改或否决；
-> 3. 若脚本建议 `pause` 或 `cancel_only` 但你认为可以执行，必须在最终决策中**明确说明理由**。
-
-### AI 自主检查清单（复核用）
-1. **趋势确认**：优先采用 `trend_1h`。当 `trend_1h` 与 `change24h_pct` 冲突时，以 `trend_1h` 为准。若 `volatility_1h > 25`，决定是否暂停或加大 gap；若 `< 5`，判断是否机会不足。
-2. **流动性检查**：若 `spread > 2` 且 `bidSz < 10` 与 `askSz < 10` 同时成立，说明流动性枯竭，应直接暂停交易并通知用户。
-3. **撤单决策**：`far_orders` 中偏离 >100 USDT 的订单，原则上全部撤销。
-4. **最终决策**：综合脚本建议与以上检查，给出结论：**执行补单 / 仅撤销远单 / 本次跳过 / 降低仓位**，并说明理由。
-
-若决策为 **执行补单**，调用 `calc_plan.py` 生成**建议草案**：
+### Step 3c · 生成并审核草案
+若默认决策允许开仓，调用 `calc_plan.py`：
 ```powershell
 python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_plan.py" `
-  "$env:TEMP\market.json" `
-  "$env:TEMP\exposure.json" `
-  "$env:TEMP\strategy.json" `
-  "$env:TEMP\far_orders.json" `
+  "$env:TEMP\market.json" "$env:TEMP\exposure.json" `
+  "$env:TEMP\strategy.json" "$env:TEMP\far_orders.json" `
   "$env:TEMP\orders.json"
 ```
 
-AI 必须基于以下数据对草案进行**审核、修改或否决**：
+### Step 3d · 逐单复核 Checklist
+对 `calc_plan.py` 输出的每一单，依次检查：
 
-`calc_plan.py` 输出的 `reasoning` 字段会解释每侧的价格是如何选出的（内扩/外扩/从零建仓、哪些候选因何被拒绝），AI 应优先阅读该字段以理解草案意图，再进行以下复核：
+- [ ] **趋势对齐度**：`mixed`/`weak` 时重侧外扩 → **删除**
+- [ ] **内扩/外扩**：`inner` 优先保留；`outer` 且重侧失衡/对齐度弱 → **删除**
+- [ ] **是否加剧 imbalance**：`imbalance_score >= 3` 且重侧新增 → **删除**
+- [ ] **target 偏离度**：`existing_count > target` 且新增为外扩 → **删除**
+- [ ] **有效覆盖距离**：理想 placement 应落在 `current_price ± gap*2` 范围内；超出且为外扩 → **删除**
+- [ ] **TP 合理性**：TP 与当前价的距离 **不应 < gap**，尤其在高波动时
+- [ ] **前置验证**：Long `tp > px && sl < px`；Short `tp < px && sl > px`
+- [ ] **总暴露上限**：补单后 `total <= 30`，per-side <= 6
 
-1. **价格布局是否合理**
-   - `calc_plan.py` 已自动生成**内扩**和**外扩**候选方案，并优先选择离当前价最近的有效位置。
-   - AI 检查：当价格明显 moved inside grid 时，草案是否在内侧生成了补单？若布局仍不符合当前市场结构，AI 可直接修改 `px`。
-
-2. **gap 是否需要动态调整**
-   - 单侧严重失衡或市场异常时，AI 可增大/减小特定订单的间距。
-
-3. **TP/SL 是否合理**
-   - `volatility_1h` 处于边界值或存在特殊风险时，AI 可调整 `tpTriggerPx` 和 `slTriggerPx`。
-
-4. **数量是否正确**
-   - per-side 是否超过 6？总暴露是否会超过 30？剩余容量是否足够？
-   - 若草案计算有误，AI 可直接删减订单。
-
-5. **前置验证（逐单检查）**
-   - Long 单必须 `tpTriggerPx > px` 且 `slTriggerPx < px`
-   - Short 单必须 `tpTriggerPx < px` 且 `slTriggerPx > px`
-   - 未通过验证的订单必须修改参数或删除。
-
-AI 修改完成后，将最终计划保存为 `plan.json`（路径 `$env:TEMP\tomokx_plan.json`）。
+AI 修改完成后，将最终计划保存为 `$env:TEMP\tomokx_plan.json`。
 
 ```json
 {
-  "cancellations": [
-    {"instId": "ETH-USDT-SWAP", "ordId": "123456"}
-  ],
+  "cancellations": [],
   "placements": [
     {
       "instId": "ETH-USDT-SWAP",
       "tdMode": "isolated",
-      "side": "sell",
+      "side": "buy",
       "ordType": "limit",
       "sz": "0.1",
-      "px": "2301.75",
-      "posSide": "short",
-      "tpTriggerPx": "2263.75",
-      "slTriggerPx": "2411.75"
+      "px": "2345.41",
+      "posSide": "long",
+      "tpTriggerPx": "2373.41",
+      "slTriggerPx": "2230.41"
     }
   ],
   "summary": {
-    "trend": "bullish",
-    "price": "2217.03",
-    "orders": "8",
+    "trend": "bearish",
+    "price": "2350.11",
+    "orders": "2",
     "positions": "6.4",
-    "total": "14.4",
-    "actions": "Cancelled 1 far order, placed 1 sell+short @ 2301.75"
+    "total": "8.4",
+    "actions": "Placed 1 buy+long @ 2345.41. Deleted 1 short outer expansion due to weak alignment."
   }
 }
 ```
 
 ---
 
-# Step 4 · 执行交易计划
+## Step 4 · 执行交易计划
 
-调用 `execute_and_finalize.py` 一步完成订单执行、止损计数器更新、日志记录和通知发送：
+调用 `execute_and_finalize.py`：
 ```powershell
-python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_and_finalize.py" ($env:TEMP + "\tomokx_plan.json")
+python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_and_finalize.py" `
+  ("$env:TEMP" + "\tomokx_plan.json")
 ```
 
-**执行失败处理**（已由脚本内部处理）：
-- 若输出中出现 **余额不足 / 价格已失效** 等错误：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划（减少数量或调整价格），再次执行 `execute_and_finalize.py`。
-- 若出现 **Rate limit (429)**：脚本内部等待 10 秒后自动重试一次。
-- 若出现 **其他错误**：脚本内部跳过该单，记录原因到日志，继续执行剩余订单。
-
+**执行失败处理**（脚本内部已处理部分）：
+- **余额不足 / 价格已失效**：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划，再次执行。
+- **Rate limit (429)**：等待 10s 后自动重试一次。
+- **其他错误**：跳过该单，记录原因到日志，继续执行剩余订单。
 
 ---
 
-## CLI Reference (v1.3.0)
+## 离线分析与参数优化
+
+每周运行以下脚本生成周报，**由 AI 阅读并决定是否微调 `config.py`**：
+
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\analyze_decisions.py"
+python "$env:USERPROFILE\.openclaw\workspace\scripts\analyze_trades.py"
+```
+
+### AI 调参安全边界
+1. **可调参数**：`base_gap_table`、`volatility_*_boost` 阈值、`trend_targets`（Long/Short 分配）
+2. **禁止触碰**：`max_total`、`daily_loss_limit`、`per-side max`、`cancel_threshold`
+3. **调整幅度**：单次变动 **≤ ±2**（如 gap 不能从 8 跳到 15）
+4. **调参频率**：**≥ 7 天一次**，禁止每次交易后都改
+5. **必须记录**：任何修改都要写入 `~/.openclaw/workspace/tuning_log.jsonl`，包含修改原因、旧值、新值、报告摘要
+
+AI 在阅读周报后，若某参数的胜率/盈亏数据呈现一致性规律（至少 10+ 条闭合记录），可在上述边界内直接修改 `config.py`。
+
+---
+
+## CLI Reference
 
 ```bash
 okx market ticker ETH-USDT-SWAP --json
@@ -213,7 +229,6 @@ node $WORKSPACE/scripts/patch-okx-cli.js
 - **Market anomaly:** Pause if price moves > 10% in 1 min or spread > 2 USDT.
 
 ## Quick Commands
-
 
 - **Env check (PowerShell):** `$WORKSPACE/scripts/env-check.ps1`
 - **Env check (Git Bash):** `bash $WORKSPACE/scripts/env-check.sh`
