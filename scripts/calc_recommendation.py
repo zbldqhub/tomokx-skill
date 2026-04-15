@@ -7,7 +7,9 @@ outputs a structured recommendation with confidence score and reasoning.
 import json
 import sys
 
-from config import MAX_TOTAL
+import os
+from datetime import datetime, timezone
+from config import MAX_TOTAL, WORKSPACE
 
 # Force UTF-8 stdout on Windows to avoid GBK encode errors for CJK characters
 if hasattr(sys.stdout, "reconfigure"):
@@ -23,6 +25,37 @@ def calc_imbalance_score(exposure):
     long_total = exposure.get("long_orders", 0) + exposure.get("long_pos_units", 0)
     short_total = exposure.get("short_orders", 0) + exposure.get("short_pos_units", 0)
     return abs(long_total - short_total)
+
+
+def check_event_risk():
+    events_path = os.path.join(WORKSPACE, "events.json")
+    if not os.path.exists(events_path):
+        return None
+    try:
+        with open(events_path, "r", encoding="utf-8") as f:
+            events = json.load(f)
+    except Exception:
+        return None
+    now = datetime.now(timezone.utc)
+    for ev in events:
+        try:
+            ev_time = datetime.fromisoformat(ev["time"].replace("Z", "+00:00"))
+            delta = abs((now - ev_time).total_seconds())
+            if delta <= 3600:
+                return ev
+        except Exception:
+            continue
+    return None
+
+
+def check_time_risk(volatility):
+    now = datetime.now(timezone.utc)
+    hour = now.hour
+    if 14 <= hour < 15 and volatility > 15:
+        return "us_open_overlap"
+    if hour == 0 and volatility > 15:
+        return "funding_settlement"
+    return None
 
 
 def trend_performance(history, trend):
@@ -70,7 +103,24 @@ def main():
     }
     suggested_gap = strategy.get("adjusted_gap", 10)
 
-    # --- Risk checks ---
+    # --- Event / time risk checks ---
+    event = check_event_risk()
+    if event:
+        recommendation = "pause"
+        confidence = min(confidence, 0.3)
+        risk_flags.append("high_impact_event")
+        reasons.append(f'重大事件窗口: {event.get("title", "unknown")} ({event.get("time", "")})，建议暂停')
+
+    time_risk = check_time_risk(volatility)
+    if time_risk:
+        confidence -= 0.1
+        risk_flags.append(time_risk)
+        if time_risk == "us_open_overlap":
+            reasons.append("UTC 14:00-15:00 美股开盘重叠期 + 高波动，谨慎开仓")
+        elif time_risk == "funding_settlement":
+            reasons.append("UTC 00:00-01:00 资金费结算窗口 + 高波动，谨慎开仓")
+
+    # --- Market risk checks ---
     if spread > 2 and bid_sz < 10 and ask_sz < 10:
         recommendation = "pause"
         confidence = 0.95

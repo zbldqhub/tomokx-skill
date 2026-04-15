@@ -9,17 +9,19 @@ def load_json(path):
         return json.load(f)
 
 
-def calc_tp_sl_offset(volatility_1h):
-    if volatility_1h < 5:
-        return 6, 85
-    elif volatility_1h < 10:
-        return 10, 90
-    elif volatility_1h < 15:
-        return 15, 98
-    elif volatility_1h < 25:
-        return 22, 108
-    else:
-        return 28, 115
+def calc_tp_sl_offset(volatility_1h, gap):
+    tp = max(8, int(gap * 1.2))
+    sl = max(16, int(gap * 1.8))
+    if volatility_1h > 25:
+        tp += 3
+        sl += 4
+    elif volatility_1h > 15:
+        tp += 2
+        sl += 3
+    elif volatility_1h > 10:
+        tp += 1
+        sl += 2
+    return tp, sl
 
 
 def get_existing_prices(orders_data, side, pos_side, far_ord_ids):
@@ -42,7 +44,7 @@ def get_existing_prices(orders_data, side, pos_side, far_ord_ids):
     return sorted(prices)
 
 
-def pick_best_long_px(current_price, existing, gap, chosen):
+def pick_best_long_px(current_price, existing, gap, chosen, allow_outer=True):
     """Generate candidates (inner + outer) and pick the best valid long price."""
     candidates = []
     mode = ""
@@ -53,9 +55,10 @@ def pick_best_long_px(current_price, existing, gap, chosen):
             if c >= max(existing) + gap:
                 candidates.append(c)
         # Outer replenish candidates
-        for k in range(1, 6):
-            c = min(existing) - gap * k
-            candidates.append(c)
+        if allow_outer:
+            for k in range(1, 6):
+                c = min(existing) - gap * k
+                candidates.append(c)
         mode = "replenish"
     else:
         # Build from scratch
@@ -98,7 +101,7 @@ def pick_best_long_px(current_price, existing, gap, chosen):
     return max(valid), mode, rejected
 
 
-def pick_best_short_px(current_price, existing, gap, chosen):
+def pick_best_short_px(current_price, existing, gap, chosen, allow_outer=True):
     """Generate candidates (inner + outer) and pick the best valid short price."""
     candidates = []
     mode = ""
@@ -109,9 +112,10 @@ def pick_best_short_px(current_price, existing, gap, chosen):
             if c <= min(existing) - gap:
                 candidates.append(c)
         # Outer replenish candidates
-        for k in range(1, 6):
-            c = max(existing) + gap * k
-            candidates.append(c)
+        if allow_outer:
+            for k in range(1, 6):
+                c = max(existing) + gap * k
+                candidates.append(c)
         mode = "replenish"
     else:
         # Build from scratch
@@ -171,7 +175,28 @@ def main():
     target_short = min(int(strategy.get("target_short", 1)), 4)
     remaining_capacity = int(exposure.get("remaining_capacity", 0))
 
-    tp_offset, sl_offset = calc_tp_sl_offset(vol)
+    alignment = strategy.get("trend_alignment", "weak")
+    imbalance = strategy.get("imbalance_score", 0)
+    long_total = exposure.get("long_orders", 0) + exposure.get("long_pos_units", 0)
+    short_total = exposure.get("short_orders", 0) + exposure.get("short_pos_units", 0)
+
+    # Outer expansion permissions
+    allow_outer_long = True
+    allow_outer_short = True
+    if trend == "bullish":
+        allow_outer_short = False
+    elif trend == "bearish":
+        allow_outer_long = False
+    if alignment in ("mixed", "weak"):
+        allow_outer_long = False
+        allow_outer_short = False
+    if imbalance >= 2:
+        if long_total > short_total:
+            allow_outer_long = False
+        elif short_total > long_total:
+            allow_outer_short = False
+
+    tp_offset, sl_offset = calc_tp_sl_offset(vol, gap)
 
     cancellations = far_orders.get("far_orders", [])
     far_ord_ids = {o.get("ordId") for o in cancellations}
@@ -255,7 +280,7 @@ def main():
 
     chosen_long = []
     for i in range(long_needed):
-        px, mode, rejected = pick_best_long_px(current_price, existing_long + chosen_long, gap, chosen_long)
+        px, mode, rejected = pick_best_long_px(current_price, existing_long + chosen_long, gap, chosen_long, allow_outer_long)
         if i == 0:
             reasoning["long"]["mode"] = mode
             reasoning["long"]["rejected"] = [[round(r[0], 2), r[1]] for r in rejected[:5]]
@@ -291,7 +316,7 @@ def main():
 
     chosen_short = []
     for i in range(short_needed):
-        px, mode, rejected = pick_best_short_px(current_price, existing_short + chosen_short, gap, chosen_short)
+        px, mode, rejected = pick_best_short_px(current_price, existing_short + chosen_short, gap, chosen_short, allow_outer_short)
         if i == 0:
             reasoning["short"]["mode"] = mode
             reasoning["short"]["rejected"] = [[round(r[0], 2), r[1]] for r in rejected[:5]]

@@ -46,17 +46,19 @@ def base_gap(total):
         return 12
 
 
-def calc_tp_sl_offset(volatility_1h):
-    if volatility_1h < 5:
-        return 6, 85
-    elif volatility_1h < 10:
-        return 10, 90
-    elif volatility_1h < 15:
-        return 15, 98
-    elif volatility_1h < 25:
-        return 22, 108
-    else:
-        return 28, 115
+def calc_tp_sl_offset(volatility_1h, gap):
+    tp = max(8, int(gap * 1.2))
+    sl = max(16, int(gap * 1.8))
+    if volatility_1h > 25:
+        tp += 3
+        sl += 4
+    elif volatility_1h > 15:
+        tp += 2
+        sl += 3
+    elif volatility_1h > 10:
+        tp += 1
+        sl += 2
+    return tp, sl
 
 
 def load_env():

@@ -107,7 +107,7 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\fetch_all_data.py"
 6. **`recommendation = pause / cancel_only`** → 原则上服从；若你判断可以执行，必须在最终决策中**明确说明理由**
 7. **远单（>100 USDT）** → 原则上全部撤销
 
-### Step 3b · 量化决策基线
+### Step 3b · 量化决策基线（含事件/时间过滤 P4）
 调用 `calc_recommendation.py`：
 ```powershell
 python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_recommendation.py" `
@@ -116,6 +116,14 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_recommendation.py" `
 ```
 
 阅读其输出的 `recommendation`、`confidence`、`suggested_targets`、`suggested_gap`、`risk_flags`。
+
+**事件过滤**：若 `~/.openclaw/workspace/events.json` 中存在高影响事件，且当前时间落在事件前后 1 小时内，系统会自动将 recommendation 设为 `pause`。
+
+**时间过滤**：
+- UTC 14:00–15:00（美股开盘重叠期）且 `volatility_1h > 15` → `confidence -0.1`
+- UTC 00:00–01:00（资金费结算窗口）且 `volatility_1h > 15` → `confidence -0.1`
+
+events.json 示例格式见仓库根目录 `events.json.example`。
 
 ### Step 3c · 生成并审核草案
 若默认决策允许开仓，调用 `calc_plan.py`：
@@ -181,6 +189,15 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_and_finalize.py" `
 - **余额不足 / 价格已失效**：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划，再次执行。
 - **Rate limit (429)**：等待 10s 后自动重试一次。
 - **其他错误**：跳过该单，记录原因到日志，继续执行剩余订单。
+
+### Step 4b · 移动保本止损（P3）
+
+`execute_and_finalize.py` 执行完毕后会自动调用 `trailing_stop_manager.py`：
+- 读取当前 live 持仓及关联的 attach TP/SL algo orders
+- 当未实现盈利 ≥ TP 距离的 50% 时，自动将 SL 上移至**开仓价 ±1 USDT**（保本）
+- 使用 OKX REST API `amend-algo-order` 直接修改，无需人工干预
+
+> 注意：新下的 limit 单尚未成交，因此不会立即触发保本逻辑；待成交后下一次交易循环即可被检测到。
 
 ---
 

@@ -8,10 +8,14 @@
 
 1. **读取 skill**: 读取 `skills/tomokx-openclaw/SKILL.md`
 2. **完整执行交易检查**: 严格按照 SKILL.md 的 Step 0-10 执行：
-   - **Step 0**: 加载环境变量 `source ~/.openclaw/workspace/.env.trading`
+   - **Step 0**: 同步最新脚本并加载环境变量
+     ```bash
+     bash /mnt/d/02_project/00-部门建设/07-部门任务2026/tomokx/scripts-openclaw/sync-scripts.sh
+     source ~/.openclaw/workspace/.env.trading
+     ```
    - **Step 1**: 检查 `~/.openclaw/workspace/.trading_stopped`（已废弃，仅保留兼容读取）
-   - **Step 1.2**: 运行 `python3 ~/.openclaw/workspace/scripts/get_bills.py --today`，检查 ETH-USDT-SWAP 日亏损是否超过 -40 USDT
-   - **Step 1.5**: 运行 `python3 ~/.openclaw/workspace/scripts/eth_market_analyzer.py` 获取市场快照
+   - **Step 1.2**: 运行 `python3 ~/.openclaw/workspace/scripts/get_bills.py`，检查 ETH-USDT-SWAP 日亏损是否超过 -40 USDT
+   - **Step 1.5**: 运行 `python3 ~/.openclaw/workspace/scripts/fetch_all_data.py` 获取市场快照
    - **Step 2**: 判断趋势（Bullish/Bearish/Sideways），优先采用 1h 趋势
    - **Step 3**: 统计 live `sell+short` 和 `buy+long` 订单数量
    - **Step 4**: 统计 10x isolated ETH-USDT-SWAP 持仓数量

@@ -6,12 +6,28 @@ import sys
 from config import base_gap
 
 
-def targets(trend):
-    if trend == "bullish":
-        return 2, 1
-    elif trend == "bearish":
-        return 1, 2
-    return 1, 2
+def targets(trend, alignment):
+    if alignment == "strong":
+        if trend == "bullish":
+            return 4, 1
+        elif trend == "bearish":
+            return 1, 4
+        else:
+            return 2, 2
+    elif alignment == "moderate":
+        if trend == "bullish":
+            return 3, 1
+        elif trend == "bearish":
+            return 1, 3
+        else:
+            return 2, 2
+    else:
+        if trend == "bullish":
+            return 2, 1
+        elif trend == "bearish":
+            return 1, 2
+        else:
+            return 1, 1
 
 
 def resolve_trend(market):
@@ -35,7 +51,7 @@ def resolve_trend(market):
         alignment = "weak"
         trend = "sideways"
 
-    target_long, target_short = targets(trend)
+    target_long, target_short = targets(trend, alignment)
 
     if alignment in ("mixed", "weak"):
         target_long = max(0, target_long - 1)

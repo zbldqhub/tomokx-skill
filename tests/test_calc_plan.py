@@ -10,10 +10,11 @@ from calc_plan import pick_best_long_px, pick_best_short_px, calc_tp_sl_offset
 
 
 def test_calc_tp_sl_offset():
-    assert calc_tp_sl_offset(3) == (12, 85)
-    assert calc_tp_sl_offset(8) == (20, 90)
-    assert calc_tp_sl_offset(18) == (38, 108)
-    assert calc_tp_sl_offset(30) == (45, 115)
+    assert calc_tp_sl_offset(3, 10) == (12, 18)
+    assert calc_tp_sl_offset(8, 10) == (12, 18)
+    assert calc_tp_sl_offset(12, 10) == (13, 20)
+    assert calc_tp_sl_offset(18, 12) == (16, 24)
+    assert calc_tp_sl_offset(30, 15) == (21, 31)
 
 
 def test_pick_best_long_px_inner():
@@ -44,7 +45,7 @@ def test_full_plan_json():
     import subprocess
     market = {"last": 2210, "volatility_1h": 12}
     exposure = {"long_orders": 2, "short_orders": 1, "orders_count": 3, "positions_count": 2, "total": 5, "remaining_capacity": 15}
-    strategy = {"trend": "bullish", "target_long": 2, "target_short": 1, "adjusted_gap": 10}
+    strategy = {"trend": "bullish", "target_long": 2, "target_short": 1, "adjusted_gap": 10, "trend_alignment": "moderate", "imbalance_score": 0}
     far_orders = {"far_orders": []}
     orders = {"data": [
         {"instId": "ETH-USDT-SWAP", "state": "live", "side": "buy", "posSide": "long", "px": "2200", "ordId": "a"},
@@ -81,7 +82,7 @@ def test_inner_replenish_boost_short():
     import subprocess, tempfile
     market = {"last": 2200, "volatility_1h": 12}
     exposure = {"long_orders": 4, "short_orders": 2, "orders_count": 6, "positions_count": 2, "total": 8, "remaining_capacity": 12}
-    strategy = {"trend": "bullish", "target_long": 2, "target_short": 1, "adjusted_gap": 14}
+    strategy = {"trend": "bullish", "target_long": 2, "target_short": 1, "adjusted_gap": 14, "trend_alignment": "moderate", "imbalance_score": 0}
     far_orders = {"far_orders": []}
     orders = {"data": [
         {"instId": "ETH-USDT-SWAP", "state": "live", "side": "sell", "posSide": "short", "px": "2244.58", "ordId": "s1"},

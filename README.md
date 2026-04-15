@@ -305,6 +305,13 @@ tomokx/
 
 ## 📝 近期更新
 
+### v2.5.0 (2026-04-15)
+- **P0 重构 TP/SL 比例**：SL 从固定 85–115 收紧为 `gap×1.8`（最低 16），TP 放宽为 `gap×1.2`（最低 8），盈亏比从 1:4+ 改善到约 1:1.5
+- **P1 禁止逆势/重侧外扩**：`calc_plan.py` 在机器生成阶段就禁止 bullish 下的 short outer、bearish 下的 long outer、mixed/weak 下的全部 outer，以及 imbalance≥2 时的重侧 outer
+- **P2 提高趋势明确时 target 上限**：strong bullish → long target 4，strong bearish → short target 4，moderate 对应 3；sideways 修复为 (1,1)
+- **P3 移动保本止损**：新增 `trailing_stop_manager.py`，持仓盈利 ≥ TP 距离 50% 时自动将 SL 移到开仓价 ±1 USDT，由 `execute_and_finalize.py` 自动调用
+- **P4 事件/时间过滤**：`calc_recommendation.py` 支持读取 `events.json` 进行高影响事件过滤，并在 UTC 14:00–15:00 及 00:00–01:00 高波动窗口自动降级 confidence
+
 ### v2.4.0 (2026-04-14)
 - **统一两套 SKILL.md**: `tomokx` 与 `tomokx-openclaw` 合并为统一策略 V2.0，内容完全一致
 - **新增 AI 决策边界**: 明确 AI 为"审核员与仲裁者"，前置"默认决策"和"禁止事项"

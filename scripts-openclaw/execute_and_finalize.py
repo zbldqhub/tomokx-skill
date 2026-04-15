@@ -421,6 +421,17 @@ def main():
     result["log"] = log_msg
     print(f"[LOG] {log_msg}")
 
+    # 6. Trailing stop / breakeven check
+    try:
+        ts_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trailing_stop_manager.py")
+        if os.path.exists(ts_script):
+            ts_out = subprocess.run([sys.executable, ts_script], capture_output=True, text=True, encoding="utf-8", errors="replace")
+            print(f"[TRAILING_STOP] {ts_out.stdout.strip()}")
+            if ts_out.stderr:
+                print(f"[TRAILING_STOP_ERR] {ts_out.stderr.strip()}")
+    except Exception as e:
+        print(f"[TRAILING_STOP] ERROR: {e}")
+
     print("\n" + json.dumps(result, indent=2))
 
     # Exit with non-zero if stop counter triggered, so caller can halt
