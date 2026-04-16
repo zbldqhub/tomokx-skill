@@ -11,6 +11,8 @@ import math
 import time
 import urllib.request
 import concurrent.futures
+import subprocess
+import shutil
 from datetime import datetime, timezone, timedelta
 
 from config import (
@@ -447,8 +449,11 @@ def main():
                         if "=" in line and not line.startswith("#"):
                             k, v = line.split("=", 1)
                             env[k] = v.strip().strip('"').strip("'")
+            okx_exe = shutil.which("okx.cmd") or shutil.which("okx") or shutil.which("okx.exe")
+            if not okx_exe:
+                return {"error": "okx CLI not found in PATH"}
             out = subprocess.run(
-                ["okx", "account", "balance", "--json"],
+                [okx_exe, "account", "balance", "--json"],
                 env=env, capture_output=True, text=True, timeout=15
             ).stdout
             data = json.loads(out)
