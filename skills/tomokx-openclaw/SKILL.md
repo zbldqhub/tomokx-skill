@@ -1,9 +1,15 @@
 ---
 name: tomokx
-description: "ETH-USDT-SWAP grid trading strategy core rules and AI decision boundaries."
+description: "Automated ETH-USDT-SWAP grid trading on OKX. Triggers: start trading, run trading check, trading status, generate daily report, reset stop counter."
 ---
 
-# ETH-USDT-SWAP 纯开仓网格交易策略 V2.0
+# 策略名称
+ETH-USDT-SWAP 纯开仓网格交易策略 V2.0
+
+# 执行节奏
+手动触发
+
+---
 
 ## Core Strategy
 
@@ -12,6 +18,8 @@ description: "ETH-USDT-SWAP grid trading strategy core rules and AI decision bou
 - **Per-side max**: 6 live orders per side.
 - **Cancel threshold**: Orders > 100 USDT from current price are cancelled.
 - **Daily loss limit**: Net realized P&L < -40 USDT for ETH-USDT-SWAP → stop.
+
+`$WORKSPACE` = `C:\Users\ldq\.openclaw\workspace`
 
 ---
 
@@ -95,8 +103,20 @@ AI **不是交易员**，而是**审核员与仲裁者**：
 
 ---
 
-## 默认决策规则（最高优先级）
+## Step 1~2 · 数据采集
 
+统一调用 `fetch_all_data.py` 一次性并发拉取所有数据：
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\fetch_all_data.py"
+```
+
+**失败处理**：若输出包含 `error`，先查看 `diagnostics` 定位失败子任务，再整体重跑一次（最多 2 次，间隔 2 秒）。若仍失败，本次跳过并通知用户具体异常。
+
+---
+
+## Step 3 · AI 综合判断（核心）
+
+### Step 3a · 典型场景默认决策（最高优先级）
 以下规则**优先于 `calc_plan.py` 的草案**，AI 必须逐条核对：
 
 1. **重侧内扩 + 轻侧内扩** → 两单都保留（结构合理）
@@ -107,7 +127,35 @@ AI **不是交易员**，而是**审核员与仲裁者**：
 6. **`recommendation = pause / cancel_only`** → 原则上服从；若你判断可以执行，必须在最终决策中**明确说明理由**
 7. **远单（>100 USDT）** → 原则上全部撤销
 
-### 逐单复核 Checklist
+### Step 3b · 量化决策基线（含事件/时间过滤 P4）
+调用 `calc_recommendation.py`：
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_recommendation.py" `
+  "$env:TEMP\market.json" "$env:TEMP\exposure.json" `
+  "$env:TEMP\strategy.json" "$env:TEMP\history.json"
+```
+
+阅读其输出的 `recommendation`、`confidence`、`suggested_targets`、`suggested_gap`、`risk_flags`。
+
+**事件过滤**：若 `~/.openclaw/workspace/events.json` 中存在高影响事件，且当前时间落在事件前后 1 小时内，系统会自动将 recommendation 设为 `pause`。
+
+**时间过滤**：
+- UTC 14:00–15:00（美股开盘重叠期）且 `volatility_1h > 15` → `confidence -0.1`
+- UTC 00:00–01:00（资金费结算窗口）且 `volatility_1h > 15` → `confidence -0.1`
+
+events.json 示例格式见仓库根目录 `events.json.example`。
+
+### Step 3c · 生成并审核草案
+若默认决策允许开仓，调用 `calc_plan.py`：
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\calc_plan.py" `
+  "$env:TEMP\market.json" "$env:TEMP\exposure.json" `
+  "$env:TEMP\strategy.json" "$env:TEMP\far_orders.json" `
+  "$env:TEMP\orders.json"
+```
+
+### Step 3d · 逐单复核 Checklist
+对 `calc_plan.py` 输出的每一单，依次检查：
 
 - [ ] **趋势对齐度**：`mixed`/`weak` 时重侧外扩 → **删除**
 - [ ] **内扩/外扩**：`inner` 优先保留；`outer` 且重侧失衡/对齐度弱 → **删除**
@@ -118,22 +166,124 @@ AI **不是交易员**，而是**审核员与仲裁者**：
 - [ ] **前置验证**：Long `tp > px && sl < px`；Short `tp < px && sl > px`
 - [ ] **总暴露上限**：补单后 `total <= 30`，per-side <= 6
 
+AI 修改完成后，将最终计划保存为 `$env:TEMP\tomokx_plan.json`。
+
+```json
+{
+  "cancellations": [],
+  "placements": [
+    {
+      "instId": "ETH-USDT-SWAP",
+      "tdMode": "isolated",
+      "side": "buy",
+      "ordType": "limit",
+      "sz": "0.2",
+      "px": "2345.41",
+      "posSide": "long",
+      "tpTriggerPx": "2373.41",
+      "slTriggerPx": "2230.41"
+    }
+  ],
+  "summary": {
+    "trend": "bearish",
+    "price": "2350.11",
+    "orders": "2",
+    "positions": "6.4",
+    "total": "8.4",
+    "actions": "Placed 1 buy+long @ 2345.41. Deleted 1 short outer expansion due to weak alignment."
+  }
+}
+```
+
+---
+
+## Step 4 · 执行交易计划
+
+调用 `execute_and_finalize.py`：
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_and_finalize.py" `
+  ("$env:TEMP" + "\tomokx_plan.json")
+```
+
+**执行失败处理**（脚本内部已处理部分）：
+- **余额不足 / 价格已失效**：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划，再次执行。
+- **Rate limit (429)**：等待 10s 后自动重试一次。
+- **其他错误**：跳过该单，记录原因到日志，继续执行剩余订单。
+
 ---
 
 ## 离线分析与参数优化
 
-每周运行一次分析脚本生成周报，**由 AI 阅读并决定是否微调 `config.py`**：
+每周运行以下脚本生成周报，**由 AI 阅读并决定是否微调 `config.py`**：
+
+```powershell
+python "$env:USERPROFILE\.openclaw\workspace\scripts\analyze_decisions.py"
+python "$env:USERPROFILE\.openclaw\workspace\scripts\analyze_trades.py"
+```
 
 ### AI 调参安全边界
 1. **可调参数**：`base_gap_table`、`volatility_*_boost` 阈值、`trend_targets`（Long/Short 分配）
 2. **禁止触碰**：`max_total`、`daily_loss_limit`、`per-side max`、`cancel_threshold`
 3. **调整幅度**：单次变动 **≤ ±2**（如 gap 不能从 8 跳到 15）
 4. **调参频率**：**≥ 7 天一次**，禁止每次交易后都改
-5. **必须记录**：任何修改都要写入 `~/.openclaw/workspace/tuning_log.jsonl`，包含修改原因、旧值、新值、报告摘要
+5. **必须记录**：任何修改都要写入 `~/.openclaw\workspace\tuning_log.jsonl`，包含修改原因、旧值、新值、报告摘要
 
 AI 在阅读周报后，若某参数的胜率/盈亏数据呈现一致性规律（至少 10+ 条闭合记录），可在上述边界内直接修改 `config.py`。
 
 ---
+
+## Windows 定时任务（全自动模式）
+
+全自动模式直接调用 `run_trade_cycle.py`，内部已包含完整的 AI 审核链路（`ai_review.py` 自动 fallback 到本地 `kimi.exe`）。
+
+### 安装定时任务
+右键以管理员身份运行：
+```powershell
+"$env:USERPROFILE\.openclaw\workspace\scripts\install_trading_task_admin.bat"
+```
+
+### 卸载定时任务
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+  "$env:USERPROFILE\.openclaw\workspace\scripts\uninstall_trading_task.ps1"
+```
+
+### 立即测试
+```powershell
+Start-ScheduledTask -TaskName "tomokx-auto-trading-ai"
+```
+
+---
+
+## CLI Reference
+
+```bash
+okx market ticker ETH-USDT-SWAP --json
+okx swap orders --json
+okx swap positions --json
+okx account balance --json
+okx swap cancel --instId ETH-USDT-SWAP --ordId <id>
+okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordType limit --sz 0.2 --px=<px> --posSide <short|long> --tpTriggerPx=<tp> --tpOrdPx=-1 --slTriggerPx=<sl> --slOrdPx=-1
+```
+
+If using Clash/V2Ray proxy on Windows and OKX CLI TLS fails, run:
+```bash
+node $WORKSPACE/scripts/patch-okx-cli.js
+```
+
+## Error Handling
+
+- **Network/timeout:** Retry up to 3 times with 2s sleep. If all fail, stop and notify.
+- **Rate limit (429):** Wait 10s, then retry.
+- **Insufficient balance:** Skip order, log warning.
+- **Order rejection:** Adjust price ±1 USDT and retry (max 2 retries).
+- **Market anomaly:** Pause if price moves > 10% in 1 min or spread > 2 USDT.
+
+## Quick Commands
+
+- **Env check (PowerShell):** `$WORKSPACE/scripts/env-check.ps1`
+- **Env check (Git Bash):** `bash $WORKSPACE/scripts/env-check.sh`
+- **Cycle diagnostic:** `python $WORKSPACE/scripts/trade_cycle_check.py`
 
 ## Risk Warning
 
