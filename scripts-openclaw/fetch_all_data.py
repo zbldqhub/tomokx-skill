@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from config import (
     API_KEY, SECRET, PASSPHRASE, WORKSPACE, ENV_FILE, MAX_TOTAL, ORDER_SIZE, LEVERAGE,
     CANCEL_THRESHOLD, STOP_FILE, DAILY_LOSS_LIMIT,
-    base_gap, ensure_api_ready, classify_orders, classify_positions
+    base_gap, ensure_api_ready, classify_orders, classify_positions, calc_order_size
 )
 
 BASE = os.environ.get("OKX_BASE_URL", "https://www.okx.com")
@@ -435,13 +435,42 @@ def main():
     risk, _ = build_risk()
     risk_elapsed = round((time.time() - t0_risk) * 1000, 1)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    def fetch_balance():
+        try:
+            env = os.environ.copy()
+            if os.path.exists(ENV_FILE):
+                with open(ENV_FILE, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("export "):
+                            line = line[7:]
+                        if "=" in line and not line.startswith("#"):
+                            k, v = line.split("=", 1)
+                            env[k] = v.strip().strip('"').strip("'")
+            out = subprocess.run(
+                ["okx", "account", "balance", "--json"],
+                env=env, capture_output=True, text=True, timeout=15
+            ).stdout
+            data = json.loads(out)
+            details = data[0].get("details", []) if data and len(data) > 0 else []
+            usdt = next((d for d in details if d.get("ccy") == "USDT"), {})
+            return {
+                "total_eq": float(usdt.get("eq", "0") or "0"),
+                "avail_eq": float(usdt.get("availEq", "0") or "0"),
+                "cash_bal": float(usdt.get("cashBal", "0") or "0"),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_orders = executor.submit(run_script, "fetch_orders.py")
         future_positions = executor.submit(run_script, "fetch_positions.py")
         future_history = executor.submit(run_script, "analyze_history.py")
+        future_balance = executor.submit(fetch_balance)
         orders = future_orders.result()
         positions = future_positions.result()
         history = future_history.result()
+        balance = future_balance.result()
 
     # Validate critical results
     errors = []
@@ -469,6 +498,12 @@ def main():
     exposure_elapsed = round((time.time() - t0_exp) * 1000, 1)
 
     total = exposure.get("total", 0)
+
+    # Account balance & dynamic order size
+    current_price = market.get("last", 0)
+    equity = balance.get("total_eq", 0) if "error" not in balance else 0
+    market["account_balance"] = balance
+    market["suggested_order_size"] = calc_order_size(equity, current_price, total)
 
     # Strategy
     gap = base_gap(int(float(total)))
@@ -533,7 +568,6 @@ def main():
     }
 
     # Far orders
-    current_price = market.get("last", 0)
     orders_list = orders.get("data", []) if isinstance(orders, dict) else []
     far_orders = []
     for o in orders_list:
