@@ -93,6 +93,10 @@ def main():
         print(f"   风险标记: {rec.get('risk_flags', [])}")
         print(f"   脚本建议 target: long={rec.get('suggested_targets', {}).get('long')}, short={rec.get('suggested_targets', {}).get('short')}")
 
+        rec_path = os.path.join(tmpdir, "rec.json")
+        with open(rec_path, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False)
+
         # Step 3b
         print("\n[Step 3b] 生成交易草案...")
         plan = run("calc_plan.py", paths["market"], paths["exposure"], paths["strategy"], paths["far_orders"], paths["orders"])
@@ -108,10 +112,47 @@ def main():
         with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(plan, f, ensure_ascii=False)
 
+        # Step 3c - AI Review
+        print("\n[Step 3c] AI 审核交易草案...")
+        reviewed = run("ai_review.py", plan_path, paths["market"], paths["exposure"], paths["strategy"], rec_path)
+        print(f"✅ 完成（{reviewed['_elapsed_ms']} ms）")
+        if "_error" in reviewed:
+            print(f"   ⚠️ AI 审核出错: {reviewed['_error']}")
+            ai_review = {}
+        else:
+            ai_review = reviewed.get("ai_review") or {}
+            print(f"   原始新建: {ai_review.get('original_placements_count')} 张")
+            print(f"   删除: {ai_review.get('deleted_count')} 张")
+            print(f"   最终新建: {ai_review.get('final_placements_count')} 张")
+            for action in ai_review.get("ai_actions", []):
+                print(f"   📝 {action}")
+
+        plan_path = os.path.join(tmpdir, "tomokx_plan_final.json")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            json.dump(reviewed, f, ensure_ascii=False)
+
         # Step 4
         print("\n[Step 4] 执行交易计划...")
-        exec_out = run("execute_and_finalize.py", plan_path)
-        print(f"✅ 完成（{exec_out['_elapsed_ms']} ms）")
+        exec_out = None
+        for attempt in range(2):
+            exec_out = run("execute_and_finalize.py", plan_path)
+            print(f"✅ 完成（{exec_out['_elapsed_ms']} ms）")
+
+            exec_data = exec_out.get("execution", {})
+            stale_count = sum(1 for p in exec_data.get("placements", []) if "SKIPPED" in p.get("result", ""))
+
+            if stale_count == 0:
+                break
+            if attempt == 0:
+                print(f"   ⚠️ {stale_count} 张订单因价格失效被跳过，重新生成修正计划...")
+                replan = run("calc_plan.py", paths["market"], paths["exposure"], paths["strategy"], paths["far_orders"], paths["orders"])
+                replan_path = os.path.join(tmpdir, "tomokx_plan_replan.json")
+                with open(replan_path, "w", encoding="utf-8") as f:
+                    json.dump(replan, f, ensure_ascii=False)
+                reviewed = run("ai_review.py", replan_path, paths["market"], paths["exposure"], paths["strategy"], rec_path)
+                plan_path = os.path.join(tmpdir, "tomokx_plan_final.json")
+                with open(plan_path, "w", encoding="utf-8") as f:
+                    json.dump(reviewed, f, ensure_ascii=False)
 
         exec_data = exec_out.get("execution", {})
         stop_counter = exec_out.get("stop_counter", {})

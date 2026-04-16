@@ -96,12 +96,92 @@ def _calc_trend_from_candles(data, threshold=0.3):
     return trend, round(avg_range, 2), round(change_pct, 2)
 
 
+def _calc_microstructure(trades, books, candle_5m, funding_hist, current_funding, last, bid_px, ask_px, bid_sz, ask_sz, vol24h):
+    """Compute enriched microstructure signals."""
+    result = {
+        "depth_ratio": round(bid_sz / ask_sz, 2) if ask_sz > 0 else 999.0,
+        "order_book_imbalance": 0.0,
+        "buy_pressure": 0.0,
+        "sell_pressure": 0.0,
+        "pressure_ratio": 1.0,
+        "large_trade_count": 0,
+        "price_velocity_5m_pct": 0.0,
+        "volume_24h": float(vol24h) if vol24h else 0.0,
+        "funding_velocity": 0.0,
+    }
+
+    # Order book imbalance within 1% of mid price
+    if isinstance(books, dict) and books.get("code") == "0":
+        book_data = books.get("data", [{}])[0]
+        bids = book_data.get("bids", [])
+        asks = book_data.get("asks", [])
+        mid = (bid_px + ask_px) / 2
+        lower = mid * 0.99
+        upper = mid * 1.01
+        bid_vol = sum(float(b[1]) for b in bids if float(b[0]) >= lower)
+        ask_vol = sum(float(a[1]) for a in asks if float(a[0]) <= upper)
+        total_vol = bid_vol + ask_vol
+        if total_vol > 0:
+            result["order_book_imbalance"] = round((bid_vol - ask_vol) / total_vol, 2)
+
+    # Trade pressure and large trades
+    if isinstance(trades, dict) and trades.get("code") == "0":
+        trade_list = trades.get("data", [])
+        buy_sz = 0.0
+        sell_sz = 0.0
+        large_count = 0
+        for t in trade_list:
+            sz = float(t.get("sz", 0))
+            side = t.get("side", "")
+            if side == "buy":
+                buy_sz += sz
+            elif side == "sell":
+                sell_sz += sz
+            if sz >= 10:
+                large_count += 1
+        result["buy_pressure"] = round(buy_sz, 2)
+        result["sell_pressure"] = round(sell_sz, 2)
+        result["pressure_ratio"] = round(buy_sz / sell_sz, 2) if sell_sz > 0 else 999.0
+        result["large_trade_count"] = large_count
+
+    # 5m price velocity (latest candle, OKX returns newest first)
+    if isinstance(candle_5m, dict) and candle_5m.get("code") == "0":
+        data_5m = candle_5m.get("data", [])
+        if data_5m:
+            latest = data_5m[0]
+            o5 = float(latest[1])
+            c5 = float(latest[4])
+            result["price_velocity_5m_pct"] = round(((c5 - o5) / o5) * 100, 2) if o5 else 0.0
+
+    # Funding velocity vs previous period
+    if isinstance(funding_hist, dict) and funding_hist.get("code") == "0":
+        hist = funding_hist.get("data", [])
+        if len(hist) >= 2:
+            prev = float(hist[1].get("fundingRate", "0") or "0") * 100
+            result["funding_velocity"] = round(current_funding - prev, 4)
+
+    return result
+
+
 def fetch_market():
+    # Core endpoints
     ticker, ticker_diag = fetch_public("/api/v5/market/ticker?instId=ETH-USDT-SWAP")
     candle_1h, candle_1h_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=1H&limit=24")
     candle_4h, candle_4h_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=4H&limit=24")
     candle_15m, candle_15m_diag = fetch_public("/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=15m&limit=48")
     funding, funding_diag = fetch_public("/api/v5/public/funding-rate?instId=ETH-USDT-SWAP")
+
+    # Microstructure endpoints (concurrent)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_trades = executor.submit(fetch_public, "/api/v5/market/trades?instId=ETH-USDT-SWAP&limit=100")
+        future_books = executor.submit(fetch_public, "/api/v5/market/books?instId=ETH-USDT-SWAP&sz=50")
+        future_candle_5m = executor.submit(fetch_public, "/api/v5/market/candles?instId=ETH-USDT-SWAP&bar=5m&limit=12")
+        future_funding_hist = executor.submit(fetch_public, "/api/v5/public/funding-rate-history?instId=ETH-USDT-SWAP&limit=2")
+
+    trades, trades_diag = future_trades.result()
+    books, books_diag = future_books.result()
+    candle_5m, candle_5m_diag = future_candle_5m.result()
+    funding_hist, funding_hist_diag = future_funding_hist.result()
 
     errors = []
     for name, obj in [("ticker", ticker), ("candle_1h", candle_1h), ("candle_4h", candle_4h), ("candle_15m", candle_15m)]:
@@ -125,6 +205,7 @@ def fetch_market():
     ask_sz = float(ticker_data.get("askSz", 0))
     open24h = float(ticker_data.get("open24h", 0))
     change24h_pct = ((last - open24h) / open24h) * 100 if open24h else 0
+    vol24h = ticker_data.get("vol24h", 0)
 
     trend_1h, vol_1h, change_1h = _calc_trend_from_candles(candle_1h.get("data", []), threshold=0.5)
     trend_4h, vol_4h, change_4h = _calc_trend_from_candles(candle_4h.get("data", []), threshold=0.8)
@@ -158,6 +239,12 @@ def fetch_market():
         elif funding_rate < -0.01:
             funding_bias = "long_favored"
 
+    # Microstructure
+    micro = _calc_microstructure(
+        trades, books, candle_5m, funding_hist, funding_rate,
+        last, bid_px, ask_px, bid_sz, ask_sz, vol24h
+    )
+
     return {
         "last": last,
         "bidPx": bid_px,
@@ -182,12 +269,18 @@ def fetch_market():
         "primary_trend": primary_trend,
         "funding_rate": round(funding_rate, 4),
         "funding_bias": funding_bias,
+        "microstructure": micro,
+        "candle_1h": candle_1h.get("data", []),
     }, {
         "ticker": ticker_diag,
         "candle_1h": candle_1h_diag,
         "candle_4h": candle_4h_diag,
         "candle_15m": candle_15m_diag,
         "funding": funding_diag,
+        "trades": trades_diag,
+        "books": books_diag,
+        "candle_5m": candle_5m_diag,
+        "funding_history": funding_hist_diag,
     }
 
 

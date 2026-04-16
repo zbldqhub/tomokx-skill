@@ -54,6 +54,7 @@ AI **不是交易员**，而是**审核员与仲裁者**：
 
 - `strong` / `moderate`：正常执行对应 target
 - `mixed` / `weak`：**两侧 target 各 -1**（最低为 0），降低暴露，等待方向明确
+  - **若同时处于 `sideways`**：两侧 target 强制归零，禁止任何 outer expansion
 
 ### Funding Rate 纠偏
 - `funding_rate > 0.01%` → `short_favored` → short target +1，long target -1（如有空间）
@@ -64,21 +65,27 @@ AI **不是交易员**，而是**审核员与仲裁者**：
 
 ## Dynamic Gap
 
+### Base Gap Table (hard floor when ATR is low)
+
 | Total Positions | Gap |
 | --------------- | --- |
-| 0 | 3 |
-| 1 | 4 |
-| 2 | 5 |
-| 3 | 6 |
-| 4 | 7 |
-| 5-6 | 8 |
-| 7-10 | 9 |
-| 11-15 | 10 |
-| 16-30 | 12 |
+| 0 | 5 |
+| 1 | 6 |
+| 2 | 7 |
+| 3 | 8 |
+| 4 | 9 |
+| 5-6 | 10 |
+| 7-10 | 11 |
+| 11-15 | 12 |
+| 16-30 | 14 |
 
 **Gap adjustments:**
-- `volatility_1h > 15` → +2~4
-- `volatility_1h > 25` → +4~6 **或 pause**
+- **ATR(14) × 0.8 dominates**: `adjusted_gap = max(base_gap, round(ATR × 0.8))`
+  - Low volatility → gap shrinks back to base table (more trades)
+  - High volatility → gap widens automatically to protect capital
+  - Soft cap: `adjusted_gap ≤ base_gap + 6` to prevent runaway gaps
+- `volatility_1h > 15` → +2 (mild boost)
+- `volatility_1h > 25` → +4
 - `spread > 0.5` → +1
 
 ---
@@ -189,15 +196,6 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\execute_and_finalize.py" `
 - **余额不足 / 价格已失效**：从失败订单开始，重新调用 `calc_plan.py` 生成修正计划，再次执行。
 - **Rate limit (429)**：等待 10s 后自动重试一次。
 - **其他错误**：跳过该单，记录原因到日志，继续执行剩余订单。
-
-### Step 4b · 移动保本止损（P3）
-
-`execute_and_finalize.py` 执行完毕后会自动调用 `trailing_stop_manager.py`：
-- 读取当前 live 持仓及关联的 attach TP/SL algo orders
-- 当未实现盈利 ≥ TP 距离的 50% 时，自动将 SL 上移至**开仓价 ±1 USDT**（保本）
-- 使用 OKX REST API `amend-algo-order` 直接修改，无需人工干预
-
-> 注意：新下的 limit 单尚未成交，因此不会立即触发保本逻辑；待成交后下一次交易循环即可被检测到。
 
 ---
 

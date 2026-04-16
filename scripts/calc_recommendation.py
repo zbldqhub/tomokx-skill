@@ -21,6 +21,17 @@ def load_json(path):
         return json.load(f)
 
 
+def load_rules():
+    rules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json")
+    if os.path.exists(rules_path):
+        return load_json(rules_path)
+    return {}
+
+
+RULES = load_rules()
+MICRO = RULES.get("microstructure", {})
+
+
 def calc_imbalance_score(exposure):
     long_total = exposure.get("long_orders", 0) + exposure.get("long_pos_units", 0)
     short_total = exposure.get("short_orders", 0) + exposure.get("short_pos_units", 0)
@@ -137,6 +148,77 @@ def main():
         risk_flags.append("high_volatility")
         reasons.append(f"波动率较高 ({volatility})，需加大 gap 或谨慎开仓")
         suggested_gap += 2
+
+    # --- Microstructure signals ---
+    micro = market.get("microstructure", {})
+
+    depth_ratio = bid_sz / ask_sz if ask_sz > 0 else 999
+    dr_cfg = MICRO.get("depth_ratio", {})
+    if depth_ratio > dr_cfg.get("bid_dominant_threshold", 3.0):
+        confidence -= dr_cfg.get("confidence_penalty", 0.05)
+        risk_flags.append("bid_depth_dominant")
+        reasons.append(f"买方深度占优 (ratio={depth_ratio:.1f})，short 侧成交风险上升")
+    elif depth_ratio < dr_cfg.get("ask_dominant_threshold", 0.33):
+        confidence -= dr_cfg.get("confidence_penalty", 0.05)
+        risk_flags.append("ask_depth_dominant")
+        reasons.append(f"卖方深度占优 (ratio={depth_ratio:.1f})，long 侧成交风险上升")
+
+    # Order book imbalance (near-mid price)
+    obi = micro.get("order_book_imbalance", 0)
+    obi_cfg = MICRO.get("order_book_imbalance", {})
+    if obi > obi_cfg.get("bid_extreme", 0.5):
+        confidence -= obi_cfg.get("confidence_penalty", 0.03)
+        risk_flags.append("book_imbalance_bid")
+        reasons.append(f"订单簿买方失衡 (obi={obi:.2f})，short 侧承压")
+    elif obi < obi_cfg.get("ask_extreme", -0.5):
+        confidence -= obi_cfg.get("confidence_penalty", 0.03)
+        risk_flags.append("book_imbalance_ask")
+        reasons.append(f"订单簿卖方失衡 (obi={obi:.2f})，long 侧承压")
+
+    # Recent trade pressure
+    pressure_ratio = micro.get("pressure_ratio", 1.0)
+    pr_cfg = MICRO.get("pressure_ratio", {})
+    if pressure_ratio > pr_cfg.get("buy_dominant_threshold", 3.0):
+        confidence -= pr_cfg.get("confidence_penalty", 0.03)
+        risk_flags.append("buy_pressure_dominant")
+        reasons.append(f"买盘成交占优 (ratio={pressure_ratio:.1f})，short 成交风险上升")
+    elif pressure_ratio < pr_cfg.get("sell_dominant_threshold", 0.33):
+        confidence -= pr_cfg.get("confidence_penalty", 0.03)
+        risk_flags.append("sell_pressure_dominant")
+        reasons.append(f"卖盘成交占优 (ratio={pressure_ratio:.1f})，long 成交风险上升")
+
+    # Large trade activity
+    large_trades = micro.get("large_trade_count", 0)
+    lt_cfg = MICRO.get("large_trade", {})
+    if large_trades >= lt_cfg.get("count_threshold", 5):
+        confidence -= lt_cfg.get("confidence_penalty", 0.05)
+        risk_flags.append("whale_activity")
+        reasons.append(f"近 100 笔成交出现 {large_trades} 笔大单 (≥{lt_cfg.get('size_threshold', 10)} ETH)，警惕鲸鱼操纵")
+
+    # 5m price velocity (quick momentum check)
+    vel_5m = micro.get("price_velocity_5m_pct", 0)
+    pv_cfg = MICRO.get("price_velocity_5m", {})
+    if abs(vel_5m) > pv_cfg.get("abs_threshold", 1.5) and volatility > pv_cfg.get("volatility_min", 15):
+        if (trend == "bearish" and vel_5m > 0) or (trend == "bullish" and vel_5m < 0):
+            confidence -= pv_cfg.get("confidence_penalty", 0.08)
+            risk_flags.append("fast_momentum_divergence")
+            reasons.append(f"5m 快速反弹 ({vel_5m:.1f}%) 与 {trend} 趋势背离")
+
+    # Funding velocity (extremization)
+    fund_vel = micro.get("funding_velocity", 0)
+    fv_cfg = MICRO.get("funding_velocity", {})
+    if abs(fund_vel) > fv_cfg.get("abs_threshold", 0.01):
+        confidence -= fv_cfg.get("confidence_penalty", 0.05)
+        risk_flags.append("funding_accelerating")
+        reasons.append(f"资金费率加速偏离 (velocity={fund_vel:.4f}%)，方向风险上升")
+
+    recent_change_1h = float(market.get("recent_change_1h_pct", 0))
+    if abs(recent_change_1h) > 2 and volatility > 15:
+        # Momentum divergence: recent move is large but trend may not fully align
+        if (trend == "bearish" and recent_change_1h > 0) or (trend == "bullish" and recent_change_1h < 0):
+            confidence -= 0.1
+            risk_flags.append("momentum_divergence")
+            reasons.append(f"1h 价格走势 ({recent_change_1h:.1f}%) 与 {trend} 趋势背离，警惕假突破")
 
     if avg_daily < -5:
         confidence -= 0.15

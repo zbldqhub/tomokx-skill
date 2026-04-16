@@ -3,7 +3,7 @@
 import json
 import sys
 
-from config import base_gap
+from config import base_gap, calc_atr
 
 
 def targets(trend, alignment):
@@ -56,6 +56,10 @@ def resolve_trend(market):
     if alignment in ("mixed", "weak"):
         target_long = max(0, target_long - 1)
         target_short = max(0, target_short - 1)
+        # Aggressive: mixed/weak sideways → halt expansion
+        if trend == "sideways":
+            target_long = 0
+            target_short = 0
 
     if funding_bias == "long_favored" and target_long < 2:
         target_long = min(2, target_long + 1)
@@ -102,10 +106,16 @@ def main():
     trend, target_long, target_short, alignment, funding_bias = resolve_trend(market)
     gap = base_gap(total_i)
 
-    if vol > 25:
-        gap += 4
-    elif vol > 15:
-        gap += 2
+    # ATR-based dynamic gap (dominant, with soft cap)
+    candles_1h = market.get("candle_1h", [])
+    atr = calc_atr(candles_1h) if candles_1h else None
+    if atr:
+        atr_gap = int(round(atr * 0.8))
+        gap = max(gap, atr_gap)
+        gap = min(gap, base_gap(total_i) + 6)  # soft cap: max base+6
+
+    if spread > 0.5:
+        gap += 1
 
     if spread > 0.5:
         gap += 1

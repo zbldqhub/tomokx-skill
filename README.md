@@ -15,6 +15,8 @@
   - 价格偏离 >100 USDT 自动取消
 - 🧠 **自我学习系统**: 每次决策和每个订单的生命周期都会被记录，AI 每周读取报告后可自主微调策略参数（gap 表、target 分配）
 - 🖥️ **双平台支持**: Windows 手动版 + Linux/openclaw 定时版
+- 📡 **ATR 动态网格**: gap 由 1h ATR(14) × 0.8 主导，低波动时自动收缩、高波动时自动防御
+- 🧠 **AI 深度审核**: `ai_review.py` 硬规则 + LLM yellow-rules gate + dynamic sizing，自动检测 openclaw → fallback 到本地 `kimi.exe`
 - 🔗 **系统 Skill 集成**: `tomokx` / `tomokx-openclaw` 已注册为 Agent 系统 Skill，且两套 SKILL 内容已统一
 
 ## 📦 版本说明
@@ -23,7 +25,7 @@
 
 | 版本 | 路径 | 适用场景 | 调度方式 |
 |------|------|---------|----------|
-| **Windows 手动版** | `skills/tomokx/` | 本地 Windows 开发/测试 | 手动触发 |
+| **Windows 手动版** | `skills/tomokx/` | 本地 Windows 开发/测试 | 手动触发 / Task Scheduler |
 | **Linux/openclaw 版** | `skills/tomokx-openclaw/` | 服务器/Linux 定时运行 | crontab / 每 30 分钟 |
 
 > **注意**: 两个版本的 `SKILL.md` 已合并为统一策略 V2.0，核心规则（趋势判定、AI 决策边界、逐单 Checklist、调参权限）完全一致。
@@ -64,6 +66,17 @@ cd tomokx-skill
 $workspace = "$env:USERPROFILE\.openclaw\workspace"
 New-Item -ItemType Directory -Force -Path "$workspace\scripts"
 Copy-Item scripts\* "$workspace\scripts\" -Recurse -Force
+```
+
+**设置定时任务（可选）**:
+```powershell
+# 安装每 4 小时自动运行的计划任务（需要管理员权限）
+# 右键以管理员身份运行:
+scripts\install_trading_task_admin.bat
+```
+或卸载：
+```powershell
+powershell -File "$env:USERPROFILE\.openclaw\workspace\scripts\uninstall_trading_task.ps1"
 ```
 
 #### Linux / openclaw 版
@@ -114,15 +127,15 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 
 | 对齐度 | 条件 | 最终趋势 | Long | Short |
 |--------|------|---------|------|-------|
-| **strong** | 4h / 1h / 15m 三者同向 | 同向趋势 | 2 / 1 / 1 | 1 / 2 / 2 |
-| **moderate** | 4h 与 1h 同向，15m 可能不同 | 4h/1h 方向 | 同上 | 同上 |
-| **mixed** | 4h 与 15m 同向，1h 不同 | Sideways | 1 | 1 |
-| **weak** | 三者均不同向 | Sideways | 1 | 1 |
+| **strong** | 4h / 1h / 15m 三者同向 | 同向趋势 | 4 / 1 | 1 / 4 |
+| **moderate** | 4h 与 1h 同向，15m 可能不同 | 4h/1h 方向 | 3 / 1 | 1 / 3 |
+| **mixed** | 4h 与 15m 同向，1h 不同 | Sideways | 0 | 0 |
+| **weak** | 三者均不同向 | Sideways | 0 | 0 |
 
 - **4h** 作为中期过滤器，决定主方向
 - **1h** 用于确认或否定 4h 信号
 - **15m** 识别短期反转噪音
-- 当 `mixed` 或 `weak` 时，系统会自动压缩 target（两侧各 -1），降低暴露等待方向明确
+- 当 `mixed` 或 `weak` 时，系统会自动压缩 target（两侧各 -1，**sideways 时强制归零**），降低暴露等待方向明确
 
 ### Funding Rate 纠偏
 
@@ -135,30 +148,35 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 
 ### 动态价格间隔
 
-| 总仓位 | 间隔 (USDT) |
-|--------|------------|
-| 0 | 3 |
-| 1 | 4 |
-| 2 | 5 |
-| 3 | 6 |
-| 4 | 7 |
-| 5-6 | 8 |
-| 7-10 | 9 |
-| 11-15 | 10 |
-| 16-30 | 12 |
+| 总仓位 | Base Gap (USDT) |
+|--------|----------------|
+| 0 | 5 |
+| 1 | 6 |
+| 2 | 7 |
+| 3 | 8 |
+| 4 | 9 |
+| 5-6 | 10 |
+| 7-10 | 11 |
+| 11-15 | 12 |
+| 16-30 | 14 |
 
-**间隔调整因子:**
-- `volatility_1h` < 8: 可减 1–2
-- `volatility_1h` 8–15: 使用 base gap
-- `volatility_1h` > 15: +2–4
-- `volatility_1h` > 25: 再增或 pause
+**ATR 动态主导:**
+- `adjusted_gap = max(base_gap, round(ATR(14) × 0.8))`
+- 当市场波动小时，gap 自动收缩回 base table（交易频率更高）
+- 当市场波动大时，gap 自动放宽（避免被震荡扫损）
+- Soft cap: `adjusted_gap ≤ base_gap + 6`，防止极端行情下 gap 失控
+
+**间隔微调:**
+- `volatility_1h` > 15: +2
+- `volatility_1h` > 25: +4
+- `spread > 0.5`: +1
 
 ### 关键规则
 
 1. **纯开仓网格**：只下 `buy+long`（开多）和 `sell+short`（开空），**禁止**主动下平仓单。平仓由每单自带的 TP/SL 自动处理。
 2. **单侧上限**：long 侧和 short 侧各自最多 **6 个 live 订单**。
 3. **序列递进**：同一周期内多个新单必须像梯子一样逐级排列，禁止价格差 < gap 的订单。
-4. **止损计数器（已移除）**：不再设置连续/累计止损次数限制，仅保留日亏损 40 USDT 上限作为风控停机条件。
+4. **TP/SL 盈亏比**: `TP = max(12, gap×1.5)`, `SL = max(20, gap×2.5)`，盈亏比约 **1:2.5**
 5. **日亏损**：只统计 `ETH-USDT-SWAP` 平仓类记录的 **pnl 净值**（盈利可冲抵亏损），净值 < -40 USDT 时停止。
 
 ### 风险控制
@@ -177,11 +195,11 @@ chmod 600 ~/.openclaw/workspace/.env.trading
 ## 🎯 执行流程
 
 ```
-Step 1+2: 并发数据采集 → 市场/订单/持仓/风险/历史一次性拉取
+Step 1+2: 并发数据采集 → 市场/订单/持仓/风险/历史/微观结构一次性拉取
 Step 3a:  典型场景默认决策 → 最高优先级规则（重侧外扩删除等）
 Step 3b:  AI 决策参考  → calc_recommendation.py 提供量化建议
 Step 3c:  生成交易草案 → calc_plan.py 基于策略生成 placements + reasoning
-Step 3d:  AI 审核决策  → 逐单 Checklist，修改或否决草案
+Step 3d:  AI 审核决策  → ai_review.py 硬规则 + LLM yellow-rules gate + dynamic sizing
 Step 4:   执行交易计划 → execute_and_finalize.py 统一执行撤单/下单/日志/学习记录
 ```
 
@@ -304,6 +322,16 @@ tomokx/
 ---
 
 ## 📝 近期更新
+
+### v2.6.0 (2026-04-16)
+- **ATR 动态主导 Gap**: base_gap 回调为 5-14，实际 `adjusted_gap = max(base_gap, round(ATR(14)×0.8))`，soft cap = base+6
+- **TP/SL 大盈亏比**: `TP=max(12, gap×1.5)`, `SL=max(20, gap×2.5)`，盈亏比约 **1:2.5**
+- **Strict Sideways**: `mixed/weak + sideways` 时两侧 target 强制归零，禁止 outer expansion
+- **微观结构惩罚减半**: `rules.json` 中 depth_ratio/price_velocity/large_trade 等 penalty 减半，避免高波动市场过度保守
+- **AI 审核链路硬化**: `ai_review.py` 自动检测 openclaw gateway → fallback 到本地 `kimi.exe`，hard rules + LLM yellow-rules gate + dynamic sizing
+- **微观结构数据**: `fetch_all_data.py` 新增 order book 1%/live trades/5m candles/funding history，输出 depth_ratio、pressure_ratio、whale_activity 等信号
+- **Trailing Stop 修复**: `trailing_stop_manager.py` 修正 OKX API 路径 (`amend-algos-order`)，增加容错
+- **Windows 定时任务脚本**: 新增 `install_trading_task_admin.bat` / `install_trading_task.ps1` / `uninstall_trading_task.ps1`
 
 ### v2.5.0 (2026-04-15)
 - **P0 重构 TP/SL 比例**：SL 从固定 85–115 收紧为 `gap×1.8`（最低 16），TP 放宽为 `gap×1.2`（最低 8），盈亏比从 1:4+ 改善到约 1:1.5

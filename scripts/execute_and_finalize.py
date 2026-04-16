@@ -72,6 +72,20 @@ def place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
     return {"raw": out_stripped, "ordId": ord_id}
 
 
+def get_latest_price(env):
+    """Fetch latest ETH-USDT-SWAP price via OKX CLI."""
+    out = run_cmd(["okx", "market", "ticker", "ETH-USDT-SWAP", "--json"], env)
+    try:
+        data = json.loads(out.strip())
+        if isinstance(data, dict):
+            if data.get("code") == "0" and data.get("data"):
+                return float(data["data"][0].get("last", 0))
+            return float(data.get("last", 0))
+    except Exception:
+        pass
+    return None
+
+
 # --- Stop counter helpers ---
 def iso_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -228,6 +242,22 @@ def _append_decision(plan, summary, daily_pnl):
             short_prices.append(p.get("px"))
     long_expansion = reasoning.get("long", {}).get("expansion_type", "")
     short_expansion = reasoning.get("short", {}).get("expansion_type", "")
+
+    # Capture AI review metadata
+    ai_review = plan.get("ai_review", {})
+    original_placements = plan.get("original_placements", [])
+    deleted_placements = []
+    final_ord_ids = {p.get("px") for p in plan.get("placements", [])}
+    for p in original_placements:
+        if p.get("px") not in final_ord_ids:
+            deleted_placements.append({
+                "side": p.get("side"),
+                "posSide": p.get("posSide"),
+                "px": p.get("px"),
+                "tpTriggerPx": p.get("tpTriggerPx"),
+                "slTriggerPx": p.get("slTriggerPx"),
+            })
+
     entry = {
         "decision_id": iso_now().replace(":", "").replace("-", "").replace(".", "") + "_" + str(os.getpid()),
         "timestamp": iso_now(),
@@ -249,12 +279,38 @@ def _append_decision(plan, summary, daily_pnl):
             "long_expansion": long_expansion,
             "short_expansion": short_expansion,
         },
+        "ai_review": {
+            "deleted_count": ai_review.get("deleted_count", 0),
+            "deleted_placements": deleted_placements,
+            "ai_actions": ai_review.get("ai_actions", []),
+            "alignment": ai_review.get("alignment", ""),
+            "imbalance": ai_review.get("imbalance", 0),
+            "recommendation": ai_review.get("recommendation", ""),
+        },
         "baseline_pnl": daily_pnl,
         "decision_source": os.environ.get("TOMOKX_DECISION_SOURCE", "ai_manual"),
     }
     with open(DECISION_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return entry["decision_id"]
+
+
+def _extract_deleted_placements(plan):
+    """Extract deleted placements for last_cycle_report."""
+    original = plan.get("original_placements", [])
+    final = plan.get("placements", [])
+    final_pxs = {p.get("px") for p in final}
+    deleted = []
+    for p in original:
+        if p.get("px") not in final_pxs:
+            deleted.append({
+                "side": p.get("side"),
+                "posSide": p.get("posSide"),
+                "px": p.get("px"),
+                "tpTriggerPx": p.get("tpTriggerPx"),
+                "slTriggerPx": p.get("slTriggerPx"),
+            })
+    return deleted
 
 
 def _append_order_tracking(plan, decision_id):
@@ -385,6 +441,9 @@ def main():
         result["execution"]["cancellations"].append({"ordId": ord_id, "result": out})
         print(f"[CANCEL] {ord_id} -> {out}")
 
+    gap = float(summary.get("gap", 10))
+    stale_keywords = ["price failure", "expired", "not valid", "too high", "too low", "price invalid"]
+
     for item in plan.get("placements", []):
         inst_id = item.get("instId", "ETH-USDT-SWAP")
         td_mode = item.get("tdMode", "isolated")
@@ -395,11 +454,29 @@ def main():
         pos_side = item["posSide"]
         tp = item["tpTriggerPx"]
         sl = item["slTriggerPx"]
+
+        # Pre-flight stale check
+        latest_price = get_latest_price(env)
+        if latest_price is not None:
+            if abs(float(px) - latest_price) > gap / 2:
+                skip_msg = f"SKIPPED: stale price (latest={latest_price}, gap={gap})"
+                result["execution"]["placements"].append({"px": px, "side": side, "posSide": pos_side, "ordId": "", "result": skip_msg})
+                print(f"[SKIP] {side}+{pos_side} @ {px}: {skip_msg}")
+                continue
+
         place_res = place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env)
         out = place_res["raw"]
         item["ordId"] = place_res["ordId"]
         result["execution"]["placements"].append({"px": px, "side": side, "posSide": pos_side, "ordId": place_res["ordId"], "result": out})
         print(f"[PLACE] {side}+{pos_side} @ {px} TP={tp} SL={sl} -> {out}")
+
+        # Post-flight stale check on exchange rejection
+        if any(k in out.lower() for k in stale_keywords):
+            stale_msg = "SKIPPED: price invalidated by exchange"
+            result["execution"]["placements"][-1]["result"] += f" | {stale_msg}"
+            print(f"[STALE] {side}+{pos_side} @ {px}: {stale_msg}")
+            continue
+
         if "429" in out or "rate limit" in out.lower():
             print("[WARN] Rate limit detected, waiting 10s...")
             time.sleep(10)
@@ -433,6 +510,39 @@ def main():
         print(f"[TRAILING_STOP] ERROR: {e}")
 
     print("\n" + json.dumps(result, indent=2))
+
+    # 7. Write last cycle report for AI continuity
+    try:
+        ai_review = plan.get("ai_review", {})
+        last_report = {
+            "executed_at": iso_now(),
+            "market_state": {
+                "price": summary.get("price", ""),
+                "trend": summary.get("trend", ""),
+                "volatility_1h": summary.get("volatility_1h", ""),
+                "gap": summary.get("gap", ""),
+            },
+            "decision": {
+                "original_placements_count": ai_review.get("original_placements_count", 0),
+                "deleted_count": ai_review.get("deleted_count", 0),
+                "final_placements_count": ai_review.get("final_placements_count", 0),
+                "deleted_placements": _extract_deleted_placements(plan),
+                "ai_actions": ai_review.get("ai_actions", []),
+                "reason": summary.get("actions", ""),
+            },
+            "execution": {
+                "cancellations_count": len(result["execution"].get("cancellations", [])),
+                "placements_count": len([p for p in result["execution"].get("placements", []) if "SKIPPED" not in p.get("result", "")]),
+                "skipped_count": len([p for p in result["execution"].get("placements", []) if "SKIPPED" in p.get("result", "")]),
+            },
+            "daily_pnl": daily_pnl,
+        }
+        report_path = os.path.join(os.path.dirname(LOG_PATH), "last_cycle_report.json")
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(last_report, f, indent=2, ensure_ascii=False)
+        print(f"[REPORT] Written to {report_path}")
+    except Exception as e:
+        print(f"[REPORT] ERROR: {e}")
 
     # Exit with non-zero if stop counter triggered, so caller can halt
 

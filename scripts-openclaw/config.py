@@ -24,40 +24,63 @@ DAILY_LOSS_LIMIT = -40
 CANCEL_THRESHOLD = 100
 DISTANCE_CAP = 80
 
-# Gap table by total exposure
+# Gap table by total exposure (v2026-04-16 dynamic: ATR-dominant with conservative floor)
 def base_gap(total):
     if total <= 0:
-        return 3
-    elif total == 1:
-        return 4
-    elif total == 2:
         return 5
-    elif total == 3:
+    elif total == 1:
         return 6
-    elif total == 4:
+    elif total == 2:
         return 7
-    elif total <= 6:
+    elif total == 3:
         return 8
-    elif total <= 10:
+    elif total == 4:
         return 9
-    elif total <= 15:
+    elif total <= 6:
         return 10
-    else:
+    elif total <= 10:
+        return 11
+    elif total <= 15:
         return 12
+    else:
+        return 14
+
+
+def calc_atr(candles):
+    """Calculate ATR(14) from list of OKX candle dicts [ts,o,h,l,c,vol,volCcy]."""
+    if not candles or len(candles) < 15:
+        return None
+    trs = []
+    for i in range(1, min(15, len(candles))):
+        prev = candles[i - 1]
+        curr = candles[i]
+        try:
+            h = float(curr[2])
+            l = float(curr[3])
+            pc = float(prev[4])
+        except Exception:
+            continue
+        tr1 = h - l
+        tr2 = abs(h - pc)
+        tr3 = abs(l - pc)
+        trs.append(max(tr1, tr2, tr3))
+    if not trs:
+        return None
+    return sum(trs) / len(trs)
 
 
 def calc_tp_sl_offset(volatility_1h, gap):
-    tp = max(8, int(gap * 1.2))
-    sl = max(16, int(gap * 1.8))
+    tp = max(12, int(gap * 1.5))
+    sl = max(20, int(gap * 2.5))
     if volatility_1h > 25:
-        tp += 3
-        sl += 4
+        tp += 5
+        sl += 8
     elif volatility_1h > 15:
-        tp += 2
-        sl += 3
+        tp += 3
+        sl += 5
     elif volatility_1h > 10:
         tp += 1
-        sl += 2
+        sl += 3
     return tp, sl
 
 

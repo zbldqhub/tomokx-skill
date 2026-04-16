@@ -71,13 +71,16 @@ def get_algo_orders(ord_type="conditional"):
 
 
 def amend_algo_sl(algo_id, new_sl):
+    # OKX TP/SL algo orders must use /api/v5/trade/amend-algos-order (plural)
     body = {
         "instId": "ETH-USDT-SWAP",
         "algoId": algo_id,
         "newSlTriggerPx": str(new_sl),
-        "newSlOrdPx": "-1",
     }
-    return _request("POST", "/api/v5/trade/amend-algo-order", body)
+    try:
+        return _request("POST", "/api/v5/trade/amend-algos-order", body)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def main():
@@ -124,36 +127,43 @@ def main():
         if tp_px == 0:
             continue
 
-        if pos_side == "long":
-            tp_distance = tp_px - avg_px
-            current_profit_dist = mark_px - avg_px
-            breakeven_sl = avg_px + 1
-            if current_profit_dist >= tp_distance * 0.5 and sl_px < breakeven_sl:
-                res = amend_algo_sl(target_algo["algoId"], round(breakeven_sl, 2))
-                updates.append({
-                    "posSide": "long",
-                    "algoId": target_algo["algoId"],
-                    "avgPx": avg_px,
-                    "markPx": mark_px,
-                    "old_sl": sl_px,
-                    "new_sl": breakeven_sl,
-                    "result": res,
-                })
-        elif pos_side == "short":
-            tp_distance = avg_px - tp_px
-            current_profit_dist = avg_px - mark_px
-            breakeven_sl = avg_px - 1
-            if current_profit_dist >= tp_distance * 0.5 and sl_px > breakeven_sl:
-                res = amend_algo_sl(target_algo["algoId"], round(breakeven_sl, 2))
-                updates.append({
-                    "posSide": "short",
-                    "algoId": target_algo["algoId"],
-                    "avgPx": avg_px,
-                    "markPx": mark_px,
-                    "old_sl": sl_px,
-                    "new_sl": breakeven_sl,
-                    "result": res,
-                })
+        try:
+            if pos_side == "long":
+                tp_distance = tp_px - avg_px
+                current_profit_dist = mark_px - avg_px
+                breakeven_sl = avg_px + 1
+                if current_profit_dist >= tp_distance * 0.5 and sl_px < breakeven_sl:
+                    res = amend_algo_sl(target_algo["algoId"], round(breakeven_sl, 2))
+                    updates.append({
+                        "posSide": "long",
+                        "algoId": target_algo["algoId"],
+                        "avgPx": avg_px,
+                        "markPx": mark_px,
+                        "old_sl": sl_px,
+                        "new_sl": breakeven_sl,
+                        "result": res,
+                    })
+            elif pos_side == "short":
+                tp_distance = avg_px - tp_px
+                current_profit_dist = avg_px - mark_px
+                breakeven_sl = avg_px - 1
+                if current_profit_dist >= tp_distance * 0.5 and sl_px > breakeven_sl:
+                    res = amend_algo_sl(target_algo["algoId"], round(breakeven_sl, 2))
+                    updates.append({
+                        "posSide": "short",
+                        "algoId": target_algo["algoId"],
+                        "avgPx": avg_px,
+                        "markPx": mark_px,
+                        "old_sl": sl_px,
+                        "new_sl": breakeven_sl,
+                        "result": res,
+                    })
+        except Exception as e:
+            updates.append({
+                "posSide": pos_side,
+                "algoId": target_algo.get("algoId"),
+                "error": str(e),
+            })
 
     print(json.dumps({"updated": len(updates), "details": updates}, indent=2, ensure_ascii=False))
 

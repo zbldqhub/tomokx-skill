@@ -10,17 +10,17 @@ def load_json(path):
 
 
 def calc_tp_sl_offset(volatility_1h, gap):
-    tp = max(8, int(gap * 1.2))
-    sl = max(16, int(gap * 1.8))
+    tp = max(12, int(gap * 1.5))
+    sl = max(20, int(gap * 2.5))
     if volatility_1h > 25:
-        tp += 3
-        sl += 4
+        tp += 5
+        sl += 8
     elif volatility_1h > 15:
-        tp += 2
-        sl += 3
+        tp += 3
+        sl += 5
     elif volatility_1h > 10:
         tp += 1
-        sl += 2
+        sl += 3
     return tp, sl
 
 
@@ -190,6 +190,13 @@ def main():
     if alignment in ("mixed", "weak"):
         allow_outer_long = False
         allow_outer_short = False
+        # Aggressive: in mixed/weak, drastically reduce targets to avoid chop
+        target_long = min(target_long, 1)
+        target_short = min(target_short, 1)
+        # If sideways with mixed/weak, prefer only inner side (no new outer)
+        if trend == "sideways":
+            target_long = min(target_long, 0)
+            target_short = min(target_short, 0)
     if imbalance >= 2:
         if long_total > short_total:
             allow_outer_long = False

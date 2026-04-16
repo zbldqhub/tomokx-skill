@@ -1,0 +1,77 @@
+{
+  "hard_rules": {
+    "tp_forbidden_zone": 3.0,
+    "distance_cap_outer_multiplier": 2.0,
+    "max_total": 30,
+    "max_per_side": 6,
+    "funding_aligned_exception": {
+      "requires": ["trend_alignment_strong", "funding_same_direction"]
+    }
+  },
+  "yellow_rules": [
+    {
+      "name": "pause_but_non_outer",
+      "condition": "recommendation=pause AND expansion_type!=outer",
+      "description": "recommendation=pause but non-outer expansion; needs LLM judgment"
+    },
+    {
+      "name": "reduce_exposure_outer",
+      "condition": "recommendation=reduce_exposure AND expansion_type=outer",
+      "description": "reduce_exposure + outer expansion; needs LLM judgment"
+    },
+    {
+      "name": "imbalance_heavy_inner",
+      "condition": "imbalance>=2 AND heavy_side AND expansion_type=inner",
+      "description": "imbalance>=2 + heavy side inner; needs LLM judgment"
+    },
+    {
+      "name": "inner_distance_aggressive",
+      "condition": "expansion_type=inner AND distance>gap*1.5",
+      "description": "inner distance > gap*1.5; aggressive placement"
+    }
+  ],
+  "microstructure": {
+    "depth_ratio": {
+      "bid_dominant_threshold": 3.0,
+      "ask_dominant_threshold": 0.33,
+      "confidence_penalty": 0.025
+    },
+    "order_book_imbalance": {
+      "bid_extreme": 0.5,
+      "ask_extreme": -0.5,
+      "confidence_penalty": 0.015
+    },
+    "pressure_ratio": {
+      "buy_dominant_threshold": 3.0,
+      "sell_dominant_threshold": 0.33,
+      "confidence_penalty": 0.015
+    },
+    "large_trade": {
+      "size_threshold": 10,
+      "count_threshold": 5,
+      "confidence_penalty": 0.03
+    },
+    "price_velocity_5m": {
+      "abs_threshold": 1.5,
+      "volatility_min": 15,
+      "confidence_penalty": 0.04
+    },
+    "funding_velocity": {
+      "abs_threshold": 0.01,
+      "confidence_penalty": 0.025
+    }
+  },
+  "dynamic_sizing": {
+    "volatility_above_25": 0.5,
+    "volatility_above_15": 0.75,
+    "confidence_above_0_85_strong": 1.5,
+    "confidence_below_0_5": 0.5,
+    "daily_pnl_below_minus_20": 0.5,
+    "daily_pnl_below_minus_30": 0.25,
+    "consecutive_losses_above_3": 0.5,
+    "recommendation_pause": 0.25,
+    "recommendation_reduce_exposure": 0.75,
+    "max_order_size": 0.2,
+    "min_order_size": 0.01
+  }
+}
