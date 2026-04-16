@@ -170,6 +170,7 @@ def main():
     vol = float(market.get("volatility_1h", 0))
     trend = strategy.get("trend", "sideways")
     gap = float(strategy.get("adjusted_gap", 10))
+    order_size = float(market.get("suggested_order_size", 0.1))
 
     target_long = min(int(strategy.get("target_long", 1)), 4)
     target_short = min(int(strategy.get("target_short", 1)), 4)
@@ -314,7 +315,7 @@ def main():
             "tdMode": "isolated",
             "side": "buy",
             "ordType": "limit",
-            "sz": "0.1",
+            "sz": str(order_size),
             "px": str(round(px, 2)),
             "posSide": "long",
             "tpTriggerPx": str(tp),
@@ -350,7 +351,7 @@ def main():
             "tdMode": "isolated",
             "side": "sell",
             "ordType": "limit",
-            "sz": "0.1",
+            "sz": str(order_size),
             "px": str(round(px, 2)),
             "posSide": "short",
             "tpTriggerPx": str(tp),

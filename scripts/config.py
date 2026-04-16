@@ -18,11 +18,45 @@ STOP_FILE = os.path.join(WORKSPACE, ".trading_stopped")
 # Strategy constants
 MAX_TOTAL = 30
 MAX_PER_SIDE = 6
-ORDER_SIZE = 0.1
+ORDER_SIZE = 0.1  # fallback legacy constant
 LEVERAGE = 10
 DAILY_LOSS_LIMIT = -40
 CANCEL_THRESHOLD = 100
 DISTANCE_CAP = 80
+
+
+def calc_order_size(equity, mark_px=None, total_exposure=0):
+    """Return order size (in contracts) based on account equity tier.
+    
+    ETH-USDT-SWAP contract size: 0.1 ETH per contract.
+    Target margin per order: ~2.5-4% of equity.
+    """
+    if equity < 100:
+        base = 0.05
+    elif equity < 300:
+        base = 0.1
+    elif equity < 600:
+        base = 0.2
+    elif equity < 1000:
+        base = 0.3
+    else:
+        base = 0.5
+
+    # Density adjustment: shrink size as exposure grows
+    if total_exposure >= 20:
+        base *= 0.5
+    elif total_exposure >= 14:
+        base *= 0.75
+
+    # Optional sanity-check against mark price margin
+    if mark_px and mark_px > 0:
+        margin_per_contract = mark_px * 0.1 / LEVERAGE
+        target_margin = equity * 0.03
+        calculated = target_margin / margin_per_contract
+        base = min(base, calculated * 1.5)
+
+    base = max(0.02, min(base, 1.0))
+    return round(base, 2)
 
 # Gap table by total exposure (v2026-04-16 dynamic: ATR-dominant with conservative floor)
 def base_gap(total):
