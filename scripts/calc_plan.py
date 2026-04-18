@@ -214,13 +214,14 @@ def main():
             allow_outer_short = False
 
     # P1: 持仓再平衡——如果单侧持仓单位超过另一侧 2 倍，抑制重侧 target
+    # 轻侧 boost 只在轻侧已有 target 时生效，避免 sideways/weak 时从零创造订单
     if long_total > short_total * 2:
         target_long = max(0, target_long - 1)
-        if target_short < 2:
+        if 0 < target_short < 2:
             target_short = min(2, target_short + 1)
     elif short_total > long_total * 2:
         target_short = max(0, target_short - 1)
-        if target_long < 2:
+        if 0 < target_long < 2:
             target_long = min(2, target_long + 1)
 
     # P5: 趋势反身性修正——15m 与主趋势相反时，禁止重侧 outer expansion
