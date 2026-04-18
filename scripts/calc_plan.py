@@ -5,7 +5,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import calc_tp_sl_offset
+from config import calc_tp_sl_offset, ORDER_SIZE, MAX_PER_SIDE
 
 
 def load_json(path):
@@ -178,6 +178,9 @@ def main():
     gap = float(strategy.get("adjusted_gap", 10))
     order_size = float(market.get("suggested_order_size", 0.1))
 
+    # target_long / target_short represent ORDER COUNT (not units).
+    # Each order's unit contribution is order_size / ORDER_SIZE.
+    # Capacity and MAX_PER_SIDE checks convert to units downstream.
     target_long = min(int(strategy.get("target_long", 1)), 4)
     target_short = min(int(strategy.get("target_short", 1)), 4)
     remaining_capacity = int(exposure.get("remaining_capacity", 0))
@@ -280,17 +283,24 @@ def main():
         else:
             short_boost_reason = f"Price moved below all short orders (min={min(existing_short)}), but no inner candidate and existing_count({len(existing_short)}) > target({target_short}); skip boost"
 
-    if long_needed + short_needed > remaining_capacity:
+    # Capacity check: remaining_capacity is in units, needed is order count.
+    # Convert to units for accurate comparison (order_size may be 0.2 → 2 units).
+    units_per_order = round(order_size / ORDER_SIZE, 1)
+    if units_per_order <= 0:
+        units_per_order = 1
+    needed_units = (long_needed + short_needed) * units_per_order
+    if needed_units > remaining_capacity:
+        available_orders = int(remaining_capacity // units_per_order)
         if trend == "bullish":
-            long_needed = min(long_needed, remaining_capacity)
-            short_needed = min(short_needed, remaining_capacity - long_needed)
+            long_needed = min(long_needed, available_orders)
+            short_needed = min(short_needed, max(0, available_orders - long_needed))
         elif trend == "bearish":
-            short_needed = min(short_needed, remaining_capacity)
-            long_needed = min(long_needed, remaining_capacity - short_needed)
+            short_needed = min(short_needed, available_orders)
+            long_needed = min(long_needed, max(0, available_orders - short_needed))
         else:
-            each = remaining_capacity // 2
+            each = available_orders // 2
             long_needed = min(long_needed, each)
-            short_needed = min(short_needed, remaining_capacity - long_needed)
+            short_needed = min(short_needed, max(0, available_orders - long_needed))
 
     placements = []
 
@@ -400,6 +410,26 @@ def main():
             "tpTriggerPx": str(tp),
             "slTriggerPx": str(sl)
         })
+
+    # Per-side max exposure guard (units)
+    long_units = exposure.get("long_orders", 0) + exposure.get("long_pos_units", 0)
+    short_units = exposure.get("short_orders", 0) + exposure.get("short_pos_units", 0)
+    filtered = []
+    for p in placements:
+        side = p.get("posSide")
+        p_units = round(order_size / ORDER_SIZE, 1)
+        if side == "long":
+            if long_units + p_units > MAX_PER_SIDE:
+                reasoning["long"]["notes"].append(f"Skipped {p['px']}: would exceed MAX_PER_SIDE ({long_units}+{p_units}>{MAX_PER_SIDE})")
+                continue
+            long_units += p_units
+        elif side == "short":
+            if short_units + p_units > MAX_PER_SIDE:
+                reasoning["short"]["notes"].append(f"Skipped {p['px']}: would exceed MAX_PER_SIDE ({short_units}+{p_units}>{MAX_PER_SIDE})")
+                continue
+            short_units += p_units
+        filtered.append(p)
+    placements = filtered
 
     actions = []
     if cancellations:

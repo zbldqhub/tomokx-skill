@@ -11,7 +11,9 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
-SCRIPTS = os.path.join(WORKSPACE, "scripts")
+# Use the scripts directory relative to this file, not the workspace
+# (workspace may contain stale copies).
+SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
 
 
 def run(cmd, *args):
@@ -70,7 +72,8 @@ def main():
     print(f"✅ 完成（{all_data['_elapsed_ms']} ms）")
     print(f"   当前价格: {market.get('last')} USDT")
     print(f"   趋势: {strategy.get('trend')}")
-    print(f"   总暴露: {exposure.get('total')}/20")
+    from scripts.config import MAX_TOTAL
+    print(f"   总暴露: {exposure.get('total')}/{MAX_TOTAL}")
     print(f"   剩余容量: {exposure.get('remaining_capacity')}")
     print(f"   远单数量: {len(far_orders.get('far_orders', []))}")
     print(f"   今日盈亏: {risk.get('daily_pnl')} USDT")

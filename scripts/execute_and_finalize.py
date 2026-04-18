@@ -564,9 +564,9 @@ def main():
         report_path = os.path.join(os.path.dirname(LOG_PATH), "last_cycle_report.json")
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(last_report, f, indent=2, ensure_ascii=False)
-        print(f"[REPORT] Written to {report_path}")
+        sys.stderr.write(f"[REPORT] Written to {report_path}\n")
     except Exception as e:
-        print(f"[REPORT] ERROR: {e}")
+        sys.stderr.write(f"[REPORT] ERROR: {e}\n")
 
     # Exit with non-zero if stop counter triggered, so caller can halt
 

@@ -61,7 +61,8 @@ def _load_env_override():
 
 def run_script(name, *args):
     env = _load_env_override()
-    cmd = [sys.executable, os.path.join(WORKSPACE, "scripts", name)] + list(args)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cmd = [sys.executable, os.path.join(script_dir, name)] + list(args)
     t0 = time.time()
     r = __import__("subprocess").run(cmd, capture_output=True, text=True, timeout=60, env=env)
     elapsed_ms = round((time.time() - t0) * 1000, 1)
@@ -667,12 +668,12 @@ def main():
 
     # Write intermediate files for downstream scripts
     _tmp_files = {
-        "/tmp/market.json": market,
-        "/tmp/exposure.json": exposure,
-        "/tmp/strategy.json": strategy,
-        "/tmp/orders.json": orders,
-        "/tmp/far_orders.json": {"far_orders": far_orders, "threshold": _dynamic_threshold, "current_price": current_price},
-        "/tmp/history.json": history,
+        "market.json": market,
+        "exposure.json": exposure,
+        "strategy.json": strategy,
+        "orders.json": orders,
+        "far_orders.json": {"far_orders": far_orders, "threshold": _dynamic_threshold, "current_price": current_price},
+        "history.json": history,
     }
     for _path, _data in _tmp_files.items():
         try:

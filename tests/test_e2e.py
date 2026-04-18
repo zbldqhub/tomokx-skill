@@ -11,8 +11,9 @@ import time
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
-SCRIPTS = os.path.join(WORKSPACE, "scripts")
+# Use scripts relative to project root, not workspace (workspace may contain stale copies)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPTS = os.path.join(PROJECT_ROOT, "scripts")
 
 
 def run(cmd, *args):
