@@ -1,27 +1,16 @@
 #!/usr/bin/env python3
 """Generate a trading plan based on market, exposure, strategy and far orders data."""
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import calc_tp_sl_offset
 
 
 def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
-
-
-def calc_tp_sl_offset(volatility_1h, gap):
-    tp = max(12, int(gap * 1.5))
-    sl = max(20, int(gap * 2.5))
-    if volatility_1h > 25:
-        tp += 5
-        sl += 8
-    elif volatility_1h > 15:
-        tp += 3
-        sl += 5
-    elif volatility_1h > 10:
-        tp += 1
-        sl += 3
-    return tp, sl
 
 
 def get_existing_prices(orders_data, side, pos_side, far_ord_ids):
@@ -44,30 +33,40 @@ def get_existing_prices(orders_data, side, pos_side, far_ord_ids):
     return sorted(prices)
 
 
-def pick_best_long_px(current_price, existing, gap, chosen, allow_outer=True):
-    """Generate candidates (inner + outer) and pick the best valid long price."""
+def pick_best_long_px(current_price, existing, gap, chosen, allow_outer=True, hedge_boost=False):
+    """Generate candidates (inner + outer) and pick the best valid long price.
+    
+    hedge_boost: When True AND existing is empty (scratch mode), the FIRST
+    candidate is placed closer using gap*0.5. All other candidates use full gap.
+    Replenish mode never uses hedge_boost to avoid breaking gap validation.
+    """
     candidates = []
     mode = ""
     if existing:
-        # Inner replenish candidates
+        # Replenish mode: never use hedge_boost; gap consistency with existing orders is critical
         for k in range(1, 6):
             c = current_price - gap * k
             if c >= max(existing) + gap:
                 candidates.append(c)
-        # Outer replenish candidates
         if allow_outer:
             for k in range(1, 6):
                 c = min(existing) - gap * k
                 candidates.append(c)
         mode = "replenish"
     else:
-        # Build from scratch
-        for k in range(5):
-            c = current_price * 0.998 - gap * k
-            candidates.append(c)
+        # Scratch mode: when hedge_boost, first candidate uses gap*0.5 (closer to price),
+        # then k=1..4 with full gap. Otherwise standard scratch.
+        if hedge_boost:
+            candidates.append(current_price * 0.998 - gap * 0.5)
+            for k in range(1, 5):
+                c = current_price * 0.998 - gap * k
+                candidates.append(c)
+        else:
+            for k in range(5):
+                c = current_price * 0.998 - gap * k
+                candidates.append(c)
         mode = "scratch"
 
-    # Filter valid candidates
     valid = []
     rejected = []
     for c in candidates:
@@ -77,7 +76,6 @@ def pick_best_long_px(current_price, existing, gap, chosen, allow_outer=True):
         if abs(c - current_price) >= 80:
             rejected.append((c, "distance_cap_80"))
             continue
-        # Gap check with existing
         ok = True
         for p in existing:
             if abs(c - p) < gap - 0.001:
@@ -86,7 +84,6 @@ def pick_best_long_px(current_price, existing, gap, chosen, allow_outer=True):
                 break
         if not ok:
             continue
-        # Gap check with already chosen
         for p in chosen:
             if abs(c - p) < gap - 0.001:
                 ok = False
@@ -97,31 +94,41 @@ def pick_best_long_px(current_price, existing, gap, chosen, allow_outer=True):
 
     if not valid:
         return None, mode, rejected
-    # Pick closest to current_price
     return max(valid), mode, rejected
 
 
-def pick_best_short_px(current_price, existing, gap, chosen, allow_outer=True):
-    """Generate candidates (inner + outer) and pick the best valid short price."""
+def pick_best_short_px(current_price, existing, gap, chosen, allow_outer=True, hedge_boost=False):
+    """Generate candidates (inner + outer) and pick the best valid short price.
+    
+    hedge_boost: When True AND existing is empty (scratch mode), the FIRST
+    candidate is placed closer using gap*0.5. All other candidates use full gap.
+    Replenish mode never uses hedge_boost to avoid breaking gap validation.
+    """
     candidates = []
     mode = ""
     if existing:
-        # Inner replenish candidates
+        # Replenish mode: never use hedge_boost
         for k in range(1, 6):
             c = current_price + gap * k
             if c <= min(existing) - gap:
                 candidates.append(c)
-        # Outer replenish candidates
         if allow_outer:
             for k in range(1, 6):
                 c = max(existing) + gap * k
                 candidates.append(c)
         mode = "replenish"
     else:
-        # Build from scratch
-        for k in range(5):
-            c = current_price * 1.002 + gap * k
-            candidates.append(c)
+        # Scratch mode: when hedge_boost, first candidate uses gap*0.5 (closer to price),
+        # then k=1..4 with full gap. Otherwise standard scratch.
+        if hedge_boost:
+            candidates.append(current_price * 1.002 + gap * 0.5)
+            for k in range(1, 5):
+                c = current_price * 1.002 + gap * k
+                candidates.append(c)
+        else:
+            for k in range(5):
+                c = current_price * 1.002 + gap * k
+                candidates.append(c)
         mode = "scratch"
 
     valid = []
@@ -151,7 +158,6 @@ def pick_best_short_px(current_price, existing, gap, chosen, allow_outer=True):
 
     if not valid:
         return None, mode, rejected
-    # Pick closest to current_price
     return min(valid), mode, rejected
 
 
@@ -204,6 +210,23 @@ def main():
         elif short_total > long_total:
             allow_outer_short = False
 
+    # P1: 持仓再平衡——如果单侧持仓单位超过另一侧 2 倍，抑制重侧 target
+    if long_total > short_total * 2:
+        target_long = max(0, target_long - 1)
+        if target_short < 2:
+            target_short = min(2, target_short + 1)
+    elif short_total > long_total * 2:
+        target_short = max(0, target_short - 1)
+        if target_long < 2:
+            target_long = min(2, target_long + 1)
+
+    # P5: 趋势反身性修正——15m 与主趋势相反时，禁止重侧 outer expansion
+    trend_15m = market.get("trend_15m", trend)
+    if trend == "bearish" and trend_15m == "bullish":
+        allow_outer_short = False
+    elif trend == "bullish" and trend_15m == "bearish":
+        allow_outer_long = False
+
     tp_offset, sl_offset = calc_tp_sl_offset(vol, gap)
 
     cancellations = far_orders.get("far_orders", [])
@@ -212,12 +235,26 @@ def main():
     existing_long = get_existing_prices(orders, "buy", "long", far_ord_ids)
     existing_short = get_existing_prices(orders, "sell", "short", far_ord_ids)
 
-    # 用过滤掉 far orders 后的实际数量计算 needed，避免 exposure 与 existing 不一致
+    # P0-revised: target 只控制挂单数量；持仓单独管理。
+    # 当持仓>0 但挂单=0 时，自动补挂单，确保网格连续性。
+    order_size = float(market.get("suggested_order_size", 0.1))
+    long_pos_units = round(exposure.get("long_pos", 0) / order_size, 1)
+    short_pos_units = round(exposure.get("short_pos", 0) / order_size, 1)
+
+    # 挂单数量（纯挂单，不含持仓）
     long_orders_count = len(existing_long)
     short_orders_count = len(existing_short)
 
+    # 基础 needed：target 减挂单
     long_needed = max(0, target_long - long_orders_count)
     short_needed = max(0, target_short - short_orders_count)
+
+    # 持仓兜底：有持仓但无挂单时，强制补 target 数量的挂单
+    # 这样持仓被止盈/止损平仓后，新的挂单已就位，网格不会断
+    if long_pos_units > 0 and long_orders_count == 0:
+        long_needed = max(long_needed, target_long)
+    if short_pos_units > 0 and short_orders_count == 0:
+        short_needed = max(short_needed, target_short)
 
     # Inner replenish boost: price moved inside grid, need to fill the gap
     long_boost_reason = ""
@@ -261,8 +298,8 @@ def main():
         "long": {
             "existing": existing_long,
             "target": target_long,
-            "existing_count": len(existing_long),
-            "target_deviation": len(existing_long) - target_long,
+            "existing_count": long_orders_count,
+            "target_deviation": long_orders_count - target_long,
             "needed": long_needed,
             "mode": "",
             "expansion_type": "",
@@ -274,8 +311,8 @@ def main():
         "short": {
             "existing": existing_short,
             "target": target_short,
-            "existing_count": len(existing_short),
-            "target_deviation": len(existing_short) - target_short,
+            "existing_count": short_orders_count,
+            "target_deviation": short_orders_count - target_short,
             "needed": short_needed,
             "mode": "",
             "expansion_type": "",
@@ -286,9 +323,15 @@ def main():
         },
     }
 
+    # Hedge boost: if one side has zero exposure while the other has some,
+    # pull the empty-side order closer to current_price (gap*0.5) so it
+    # actually gets filled and provides a real hedge instead of a ghost order.
+    long_hedge_boost = (long_total == 0 and short_total > 0)
+    short_hedge_boost = (short_total == 0 and long_total > 0)
+
     chosen_long = []
     for i in range(long_needed):
-        px, mode, rejected = pick_best_long_px(current_price, existing_long + chosen_long, gap, chosen_long, allow_outer_long)
+        px, mode, rejected = pick_best_long_px(current_price, existing_long, gap, chosen_long, allow_outer_long, long_hedge_boost)
         if i == 0:
             reasoning["long"]["mode"] = mode
             reasoning["long"]["rejected"] = [[round(r[0], 2), r[1]] for r in rejected[:5]]
@@ -324,7 +367,7 @@ def main():
 
     chosen_short = []
     for i in range(short_needed):
-        px, mode, rejected = pick_best_short_px(current_price, existing_short + chosen_short, gap, chosen_short, allow_outer_short)
+        px, mode, rejected = pick_best_short_px(current_price, existing_short, gap, chosen_short, allow_outer_short, short_hedge_boost)
         if i == 0:
             reasoning["short"]["mode"] = mode
             reasoning["short"]["rejected"] = [[round(r[0], 2), r[1]] for r in rejected[:5]]

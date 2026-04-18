@@ -11,7 +11,7 @@ import subprocess
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, ORDER_TRACKING_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready, MAX_TOTAL
+from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, ORDER_TRACKING_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready, MAX_TOTAL, ORDER_SIZE
 import base64, hmac, hashlib
 
 
@@ -22,7 +22,7 @@ SOURCE = "tomokx-openclaw" if "openclaw" in os.path.dirname(os.path.abspath(__fi
 def load_env():
     env = os.environ.copy()
     if os.path.exists(ENV_FILE):
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
+        with open(ENV_FILE, "r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("export "):
@@ -36,30 +36,32 @@ def load_env():
 
 # --- Order execution helpers ---
 def run_cmd(cmd_list, env):
-    cmd_str = " ".join(cmd_list)
+    """Run a command safely. On Windows .cmd files cannot be executed directly
+    by CreateProcess, so we wrap with cmd.exe /c. Arguments are passed as a list,
+    so subprocess quotes each element correctly — no shell injection."""
+    cmd = list(cmd_list)
     if sys.platform == "win32":
-        r = subprocess.run(cmd_str, env=env, capture_output=True, text=True, timeout=20, shell=True, encoding="utf-8", errors="replace")
-    else:
-        full = f"source {ENV_FILE} && " + cmd_str
-        r = subprocess.run(["bash", "-c", full], env=env, capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace")
+        # Wrap with cmd.exe /c so .cmd scripts are found and executed
+        cmd = ["cmd.exe", "/c"] + cmd
+    r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace")
     return r.stdout or r.stderr or ""
 
 
 def cancel_order(inst_id, ord_id, env):
-    out = run_cmd(["okx", "swap", "cancel", f"--instId {inst_id}", f"--ordId {ord_id}"], env)
+    out = run_cmd(["okx", "swap", "cancel", f"--instId={inst_id}", f"--ordId={ord_id}"], env)
     return out.strip()
 
 
 def place_order(inst_id, td_mode, side, ord_type, sz, px, pos_side, tp, sl, env):
     out = run_cmd([
         "okx", "swap", "place",
-        f"--instId {inst_id}",
-        f"--tdMode {td_mode}",
-        f"--side {side}",
-        f"--ordType {ord_type}",
-        f"--sz {sz}",
+        f"--instId={inst_id}",
+        f"--tdMode={td_mode}",
+        f"--side={side}",
+        f"--ordType={ord_type}",
+        f"--sz={sz}",
         f"--px={px}",
-        f"--posSide {pos_side}",
+        f"--posSide={pos_side}",
         f"--tpTriggerPx={tp}",
         "--tpOrdPx=-1",
         f"--slTriggerPx={sl}",
@@ -156,7 +158,7 @@ def read_stop_counter():
     if mtime.date() != today:
         return 0
     try:
-        with open(STOP_FILE, "r", encoding="utf-8") as f:
+        with open(STOP_FILE, "r", encoding="utf-8-sig") as f:
             return int(f.read().strip())
     except Exception:
         return 0
@@ -188,7 +190,7 @@ def _read_last_open_decision():
     if not os.path.exists(DECISION_LOG_PATH):
         return None
     last_open = None
-    with open(DECISION_LOG_PATH, "r", encoding="utf-8") as f:
+    with open(DECISION_LOG_PATH, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -207,7 +209,7 @@ def _update_decision_outcome(decision_id, outcome_pnl, exit_price):
         return False
     lines = []
     updated = False
-    with open(DECISION_LOG_PATH, "r", encoding="utf-8") as f:
+    with open(DECISION_LOG_PATH, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -399,7 +401,7 @@ def main():
         print("Usage: python3 execute_and_finalize.py <plan.json>")
         sys.exit(1)
 
-    with open(plan_path, "r", encoding="utf-8") as f:
+    with open(plan_path, "r", encoding="utf-8-sig") as f:
         plan = json.load(f)
 
     env = load_env()
@@ -434,17 +436,30 @@ def main():
         print(f"[DECISION_LOG] Appended {decision_id}")
 
     # 2. Execute orders
+    # Pre-flight exposure check
+    current_total = float(summary.get("total", 0))
+    planned_units = sum(float(p.get("sz", ORDER_SIZE)) / ORDER_SIZE for p in plan.get("placements", []))
+    if current_total + planned_units > MAX_TOTAL:
+        print(f"[WARN] Planned exposure {current_total + planned_units} would exceed MAX_TOTAL={MAX_TOTAL}. Some placements may be skipped.")
+
     for item in plan.get("cancellations", []):
         inst_id = item.get("instId", "ETH-USDT-SWAP")
         ord_id = item["ordId"]
         out = cancel_order(inst_id, ord_id, env)
         result["execution"]["cancellations"].append({"ordId": ord_id, "result": out})
-        print(f"[CANCEL] {ord_id} -> {out}")
+        # Friendly handling for already-filled/cancelled orders
+        if "does not exist" in out.lower() or "filled" in out.lower() or "canceled" in out.lower():
+            print(f"[CANCEL] {ord_id} -> already closed (OK)")
+        else:
+            print(f"[CANCEL] {ord_id} -> {out}")
 
     gap = float(summary.get("gap", 10))
     stale_keywords = ["price failure", "expired", "not valid", "too high", "too low", "price invalid"]
 
     for item in plan.get("placements", []):
+        # Cooldown between placements to avoid rate limits
+        time.sleep(0.5)
+
         inst_id = item.get("instId", "ETH-USDT-SWAP")
         td_mode = item.get("tdMode", "isolated")
         side = item["side"]
@@ -454,6 +469,15 @@ def main():
         pos_side = item["posSide"]
         tp = item["tpTriggerPx"]
         sl = item["slTriggerPx"]
+
+        # Skip if this placement would breach MAX_TOTAL
+        item_units = float(sz) / ORDER_SIZE
+        if current_total + item_units > MAX_TOTAL:
+            skip_msg = f"SKIPPED: would exceed MAX_TOTAL ({current_total}+{item_units}>{MAX_TOTAL})"
+            result["execution"]["placements"].append({"px": px, "side": side, "posSide": pos_side, "ordId": "", "result": skip_msg})
+            print(f"[SKIP] {side}+{pos_side} @ {px}: {skip_msg}")
+            continue
+        current_total += item_units
 
         # Pre-flight stale check
         latest_price = get_latest_price(env)

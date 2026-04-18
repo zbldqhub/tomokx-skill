@@ -43,7 +43,7 @@ def check_event_risk():
     if not os.path.exists(events_path):
         return None
     try:
-        with open(events_path, "r", encoding="utf-8") as f:
+        with open(events_path, "r", encoding="utf-8-sig") as f:
             events = json.load(f)
     except Exception:
         return None
@@ -109,8 +109,8 @@ def main():
     risk_flags = []
     recommendation = "proceed"
     suggested_targets = {
-        "long": strategy.get("target_long", 1),
-        "short": strategy.get("target_short", 1),
+        "long": max(0, int(strategy.get("target_long", 1))),
+        "short": max(0, int(strategy.get("target_short", 1))),
     }
     suggested_gap = strategy.get("adjusted_gap", 10)
 

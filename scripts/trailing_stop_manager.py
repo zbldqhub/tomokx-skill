@@ -131,31 +131,53 @@ def main():
             if pos_side == "long":
                 tp_distance = tp_px - avg_px
                 current_profit_dist = mark_px - avg_px
-                breakeven_sl = avg_px + 1
-                if current_profit_dist >= tp_distance * 0.5 and sl_px < breakeven_sl:
-                    res = amend_algo_sl(target_algo["algoId"], round(breakeven_sl, 2))
+                profit_ratio = current_profit_dist / tp_distance if tp_distance > 0 else 0
+                new_sl = None
+                # P4: 多层追踪止盈（独立评估所有档位，取最激进的有效值）
+                candidates = []
+                if profit_ratio >= 1.0 and sl_px < avg_px + tp_distance * 0.5:
+                    candidates.append(avg_px + tp_distance * 0.5)
+                if profit_ratio >= 0.75 and sl_px < avg_px + tp_distance * 0.25:
+                    candidates.append(avg_px + tp_distance * 0.25)
+                if profit_ratio >= 0.5 and sl_px < avg_px + 1:
+                    candidates.append(avg_px + 1)
+                if candidates:
+                    new_sl = round(max(candidates), 2)
+                    res = amend_algo_sl(target_algo["algoId"], new_sl)
                     updates.append({
                         "posSide": "long",
                         "algoId": target_algo["algoId"],
                         "avgPx": avg_px,
                         "markPx": mark_px,
                         "old_sl": sl_px,
-                        "new_sl": breakeven_sl,
+                        "new_sl": new_sl,
+                        "profit_ratio": round(profit_ratio, 2),
                         "result": res,
                     })
             elif pos_side == "short":
                 tp_distance = avg_px - tp_px
                 current_profit_dist = avg_px - mark_px
-                breakeven_sl = avg_px - 1
-                if current_profit_dist >= tp_distance * 0.5 and sl_px > breakeven_sl:
-                    res = amend_algo_sl(target_algo["algoId"], round(breakeven_sl, 2))
+                profit_ratio = current_profit_dist / tp_distance if tp_distance > 0 else 0
+                new_sl = None
+                # P4: 多层追踪止盈（独立评估所有档位，取最激进的有效值）
+                candidates = []
+                if profit_ratio >= 1.0 and sl_px > avg_px - tp_distance * 0.5:
+                    candidates.append(avg_px - tp_distance * 0.5)
+                if profit_ratio >= 0.75 and sl_px > avg_px - tp_distance * 0.25:
+                    candidates.append(avg_px - tp_distance * 0.25)
+                if profit_ratio >= 0.5 and sl_px > avg_px - 1:
+                    candidates.append(avg_px - 1)
+                if candidates:
+                    new_sl = round(min(candidates), 2)
+                    res = amend_algo_sl(target_algo["algoId"], new_sl)
                     updates.append({
                         "posSide": "short",
                         "algoId": target_algo["algoId"],
                         "avgPx": avg_px,
                         "markPx": mark_px,
                         "old_sl": sl_px,
-                        "new_sl": breakeven_sl,
+                        "new_sl": new_sl,
+                        "profit_ratio": round(profit_ratio, 2),
                         "result": res,
                     })
         except Exception as e:

@@ -18,7 +18,7 @@ from config import MAX_TOTAL, MAX_PER_SIDE, ORDER_SIZE
 
 
 def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -91,10 +91,10 @@ def calc_dynamic_sz(base_sz, context):
     elif confidence < 0.5:
         sz *= DYNAMIC.get("confidence_below_0_5", 0.5)
 
-    if daily_pnl < -20:
-        sz *= DYNAMIC.get("daily_pnl_below_minus_20", 0.5)
-    elif daily_pnl < -30:
+    if daily_pnl < -30:
         sz *= DYNAMIC.get("daily_pnl_below_minus_30", 0.25)
+    elif daily_pnl < -20:
+        sz *= DYNAMIC.get("daily_pnl_below_minus_20", 0.5)
 
     if consecutive_losses >= 3:
         sz *= DYNAMIC.get("consecutive_losses_above_3", 0.5)
@@ -113,7 +113,7 @@ def read_consecutive_losses():
         return 0
     losses = 0
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             lines = [l.strip() for l in f if l.strip()]
         for line in reversed(lines):
             try:
@@ -267,7 +267,7 @@ def load_openclaw_token():
     config_path = os.path.expanduser("~/.openclaw/openclaw.json")
     if os.path.exists(config_path):
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, "r", encoding="utf-8-sig") as f:
                 cfg = json.load(f)
             return cfg.get("gateway", {}).get("auth", {}).get("token", "")
         except Exception:

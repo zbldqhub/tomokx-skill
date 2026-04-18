@@ -60,24 +60,23 @@ def calc_order_size(equity, mark_px=None, total_exposure=0):
 
 # Gap table by total exposure (v2026-04-16 dynamic: ATR-dominant with conservative floor)
 def base_gap(total):
+    # P2: 放宽 Gap 地板值，低暴露时给予更大呼吸空间
     if total <= 0:
-        return 5
-    elif total == 1:
-        return 6
-    elif total == 2:
-        return 7
-    elif total == 3:
         return 8
-    elif total == 4:
+    elif total == 1:
         return 9
-    elif total <= 6:
+    elif total == 2:
         return 10
-    elif total <= 10:
+    elif total <= 4:
         return 11
-    elif total <= 15:
+    elif total <= 6:
         return 12
-    else:
+    elif total <= 10:
+        return 13
+    elif total <= 15:
         return 14
+    else:
+        return 16
 
 
 def calc_atr(candles):
@@ -104,17 +103,17 @@ def calc_atr(candles):
 
 
 def calc_tp_sl_offset(volatility_1h, gap):
-    tp = max(12, int(gap * 1.5))
+    tp = max(15, int(gap * 2.0))
     sl = max(20, int(gap * 2.5))
     if volatility_1h > 25:
+        tp += 8
+        sl += 10
+    elif volatility_1h > 15:
         tp += 5
         sl += 8
-    elif volatility_1h > 15:
-        tp += 3
-        sl += 5
     elif volatility_1h > 10:
-        tp += 1
-        sl += 3
+        tp += 2
+        sl += 4
     return tp, sl
 
 
@@ -122,7 +121,7 @@ def load_env():
     """Load .env.trading into os.environ if not already present."""
     if not os.path.exists(ENV_FILE):
         return
-    with open(ENV_FILE, "r", encoding="utf-8") as f:
+    with open(ENV_FILE, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):

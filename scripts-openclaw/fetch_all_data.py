@@ -23,11 +23,31 @@ from config import (
 
 BASE = os.environ.get("OKX_BASE_URL", "https://www.okx.com")
 
+# Inject .env.trading into os.environ so downstream code (including fetch_public) sees proxy settings
+if os.path.exists(ENV_FILE):
+    with open(ENV_FILE, "r", encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                v = v.strip().strip('"').strip("'")
+                os.environ.setdefault(k, v)
+
+
+def _ssl_context():
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
 
 def _load_env_override():
     env = os.environ.copy()
     if os.path.exists(ENV_FILE):
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
+        with open(ENV_FILE, "r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("export "):
@@ -69,10 +89,20 @@ def fetch_public(path):
     t0 = time.time()
     try:
         req = urllib.request.Request(BASE + path)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            elapsed_ms = round((time.time() - t0) * 1000, 1)
-            return data, {"path": path, "elapsed_ms": elapsed_ms, "error": ""}
+        proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+        if proxy:
+            handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+            https_handler = urllib.request.HTTPSHandler(context=_ssl_context())
+            opener = urllib.request.build_opener(handler, https_handler)
+            with opener.open(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                elapsed_ms = round((time.time() - t0) * 1000, 1)
+                return data, {"path": path, "elapsed_ms": elapsed_ms, "error": ""}
+        else:
+            with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                elapsed_ms = round((time.time() - t0) * 1000, 1)
+                return data, {"path": path, "elapsed_ms": elapsed_ms, "error": ""}
     except Exception as e:
         elapsed_ms = round((time.time() - t0) * 1000, 1)
         return {"error": str(e)}, {"path": path, "elapsed_ms": elapsed_ms, "error": str(e)[:300]}
@@ -311,13 +341,14 @@ def _fetch_auth(path):
     proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
     if proxy:
         handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-        opener = urllib.request.build_opener(handler)
+        https_handler = urllib.request.HTTPSHandler(context=_ssl_context())
+        opener = urllib.request.build_opener(handler, https_handler)
         req = urllib.request.Request(BASE + path, headers=headers)
-        with opener.open(req, timeout=15) as resp:
+        with opener.open(req, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8"))
     else:
         req = urllib.request.Request(BASE + path, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
 
@@ -329,7 +360,7 @@ def _read_trading_stopped():
     if mtime.date() != today:
         return 0
     try:
-        with open(STOP_FILE, "r", encoding="utf-8") as f:
+        with open(STOP_FILE, "r", encoding="utf-8-sig") as f:
             return int(f.read().strip())
     except Exception:
         return 0
@@ -398,13 +429,32 @@ def build_exposure(orders, positions):
     orders_list = orders.get("data", []) if isinstance(orders, dict) else []
     positions_list = positions.get("data", []) if isinstance(positions, dict) else []
 
-    short_orders, long_orders = classify_orders(orders_list)
+    short_orders_raw, long_orders_raw = classify_orders(orders_list)
     short_pos, long_pos = classify_positions(positions_list)
 
     short_pos_units = round(short_pos / ORDER_SIZE, 1)
     long_pos_units = round(long_pos / ORDER_SIZE, 1)
-    orders_count = short_orders + long_orders
     positions_count = round(short_pos_units + long_pos_units, 1)
+
+    # FIX: 统一 orders 和 positions 的口径为 units（sz / ORDER_SIZE），
+    # 否则每单 sz=0.2 时 orders 只计 1 单，而实际等价于 2 units，
+    # 导致 total 被低估、remaining_capacity 被高估，允许过度暴露。
+    # 同时 short_orders/long_orders 也必须用 units，因为下游脚本
+    # （calc_recommendation, calc_plan, ai_review）用它们 + pos_units 算 imbalance。
+    short_orders_sz = 0.0
+    long_orders_sz = 0.0
+    for o in orders_list:
+        if o.get("instId") != "ETH-USDT-SWAP" or o.get("state") != "live":
+            continue
+        sz = float(o.get("sz", 0) or 0)
+        ps = o.get("posSide")
+        if ps == "short":
+            short_orders_sz += sz
+        elif ps == "long":
+            long_orders_sz += sz
+    short_orders = round(short_orders_sz / ORDER_SIZE, 1)
+    long_orders = round(long_orders_sz / ORDER_SIZE, 1)
+    orders_count = round(short_orders + long_orders, 1)
     total = round(orders_count + positions_count, 1)
     remaining = math.floor(MAX_TOTAL - total)
 
@@ -441,7 +491,7 @@ def main():
         try:
             env = os.environ.copy()
             if os.path.exists(ENV_FILE):
-                with open(ENV_FILE, "r", encoding="utf-8") as f:
+                with open(ENV_FILE, "r", encoding="utf-8-sig") as f:
                     for line in f:
                         line = line.strip()
                         if line.startswith("export "):
@@ -454,9 +504,9 @@ def main():
                 return {"error": "okx CLI not found in PATH"}
             out = subprocess.run(
                 [okx_exe, "account", "balance", "--json"],
-                env=env, capture_output=True, text=True, timeout=15
+                env=env, capture_output=True, timeout=15
             ).stdout
-            data = json.loads(out)
+            data = json.loads(out.decode("utf-8", errors="replace"))
             details = data[0].get("details", []) if data and len(data) > 0 else []
             usdt = next((d for d in details if d.get("ccy") == "USDT"), {})
             return {
@@ -572,14 +622,15 @@ def main():
         "funding_bias": funding_bias,
     }
 
-    # Far orders
+    # P3: Far orders 动态阈值——按 gap*5 或 80 取大，避免低波动时过早取消、高波动时保留过远单
+    _dynamic_threshold = max(80, int(gap * 5))
     orders_list = orders.get("data", []) if isinstance(orders, dict) else []
     far_orders = []
     for o in orders_list:
         if o.get("instId") != "ETH-USDT-SWAP" or o.get("state") != "live":
             continue
         px = float(o.get("px", "0") or "0")
-        if abs(px - current_price) > CANCEL_THRESHOLD:
+        if abs(px - current_price) > _dynamic_threshold:
             far_orders.append({
                 "instId": "ETH-USDT-SWAP",
                 "ordId": o.get("ordId"),
@@ -601,7 +652,7 @@ def main():
         "positions": positions,
         "exposure": exposure,
         "strategy": strategy,
-        "far_orders": {"far_orders": far_orders, "threshold": CANCEL_THRESHOLD, "current_price": current_price},
+        "far_orders": {"far_orders": far_orders, "threshold": _dynamic_threshold, "current_price": current_price},
         "history": history,
         "liquidity_warning": liquidity_warning,
         "diagnostics": {
@@ -620,7 +671,7 @@ def main():
         "/tmp/exposure.json": exposure,
         "/tmp/strategy.json": strategy,
         "/tmp/orders.json": orders,
-        "/tmp/far_orders.json": {"far_orders": far_orders, "threshold": CANCEL_THRESHOLD, "current_price": current_price},
+        "/tmp/far_orders.json": {"far_orders": far_orders, "threshold": _dynamic_threshold, "current_price": current_price},
         "/tmp/history.json": history,
     }
     for _path, _data in _tmp_files.items():

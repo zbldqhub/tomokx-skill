@@ -7,27 +7,25 @@ from config import base_gap, calc_atr
 
 
 def targets(trend, alignment):
+    # Align with SKILL.md target table
     if alignment == "strong":
-        if trend == "bullish":
-            return 4, 1
-        elif trend == "bearish":
-            return 1, 4
-        else:
-            return 2, 2
-    elif alignment == "moderate":
-        if trend == "bullish":
-            return 3, 1
-        elif trend == "bearish":
-            return 1, 3
-        else:
-            return 2, 2
-    else:
         if trend == "bullish":
             return 2, 1
         elif trend == "bearish":
             return 1, 2
         else:
             return 1, 1
+    elif alignment == "moderate":
+        if trend == "bullish":
+            return 2, 1
+        elif trend == "bearish":
+            return 1, 2
+        else:
+            return 1, 1
+    else:
+        # mixed / weak: base (1,1); resolve_trend subtracts 1 each → (0,0)
+        # sideways branch in resolve_trend also forces both to 0
+        return 1, 1
 
 
 def resolve_trend(market):
@@ -95,7 +93,7 @@ def main():
         print("Usage: python3 calc_strategy.py <market.json> <total> [exposure.json]")
         sys.exit(1)
 
-    with open(market_path, "r", encoding="utf-8") as f:
+    with open(market_path, "r", encoding="utf-8-sig") as f:
         market = json.load(f)
 
     total_i = int(float(total))
@@ -117,13 +115,10 @@ def main():
     if spread > 0.5:
         gap += 1
 
-    if spread > 0.5:
-        gap += 1
-
     imbalance = 0
     if exposure_path:
         try:
-            with open(exposure_path, "r", encoding="utf-8") as f:
+            with open(exposure_path, "r", encoding="utf-8-sig") as f:
                 exposure = json.load(f)
             target_long, target_short, imbalance = adjust_targets_for_imbalance(
                 target_long, target_short, exposure

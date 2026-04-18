@@ -15,7 +15,7 @@ def main():
         sys.exit(1)
 
     price = float(current_price)
-    with open(orders_path, "r", encoding="utf-8") as f:
+    with open(orders_path, "r", encoding="utf-8-sig") as f:
         orders_data = json.load(f)
 
     orders_list = orders_data.get("data", []) if isinstance(orders_data, dict) else []

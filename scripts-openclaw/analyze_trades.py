@@ -57,7 +57,7 @@ def load_tracking(path):
     entries = []
     if not os.path.exists(path):
         return entries
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line:

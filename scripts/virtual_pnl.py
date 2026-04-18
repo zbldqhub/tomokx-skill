@@ -78,7 +78,7 @@ def load_today_decisions():
         return []
     entries = []
     today = datetime.now(timezone.utc).date()
-    with open(DECISION_LOG_PATH, "r", encoding="utf-8") as f:
+    with open(DECISION_LOG_PATH, "r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line:
