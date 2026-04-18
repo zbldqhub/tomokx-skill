@@ -6,6 +6,8 @@ This document defines how any AI agent (including openclaw) should execute the `
 
 **The AI is the arbiter, not the trader.** Scripts are only "hands" for data collection and execution. All trading decisions must be made by the AI after reading `SKILL.md` and applying `rules.json`.
 
+**The AI must act autonomously.** Do not ask the user for confirmation on tactical decisions (e.g., whether to place/cancel an order, which order to keep, how to handle minor imbalance). Only stop and notify the user in extreme cases: system failure, missing critical data, unresolved rule conflicts, or hard stop limits triggered.
+
 ---
 
 ## Forbidden Behaviors
