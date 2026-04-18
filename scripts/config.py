@@ -25,11 +25,12 @@ CANCEL_THRESHOLD = 100
 DISTANCE_CAP = 80
 
 
-def calc_order_size(equity, mark_px=None, total_exposure=0):
+def calc_order_size(equity, mark_px=None, total_exposure=0, volatility_1h=0):
     """Return order size (in contracts) based on account equity tier.
     
     ETH-USDT-SWAP contract size: 0.1 ETH per contract.
     Target margin per order: ~2.5-4% of equity.
+    High volatility reduces size to limit per-trade loss.
     """
     if equity < 100:
         base = 0.05
@@ -46,6 +47,12 @@ def calc_order_size(equity, mark_px=None, total_exposure=0):
     if total_exposure >= 20:
         base *= 0.5
     elif total_exposure >= 14:
+        base *= 0.75
+
+    # Volatility adjustment: high vol → smaller size to avoid large SL hits
+    if volatility_1h > 35:
+        base *= 0.5
+    elif volatility_1h > 25:
         base *= 0.75
 
     # Optional sanity-check against mark price margin
@@ -102,18 +109,29 @@ def calc_atr(candles):
     return sum(trs) / len(trs)
 
 
-def calc_tp_sl_offset(volatility_1h, gap):
-    tp = max(15, int(gap * 2.0))
-    sl = max(20, int(gap * 2.5))
-    if volatility_1h > 25:
-        tp += 8
-        sl += 10
-    elif volatility_1h > 15:
+def calc_tp_sl_offset(volatility_1h, gap, atr=None):
+    """Calculate TP/SL offsets.
+    
+    If atr (ATR from 1h candles) is provided, use ATR-based distances
+    for better volatility adaptation. Fallback to gap-based when ATR
+    is unavailable.
+    """
+    if atr is not None and atr > 0:
+        tp = max(15, int(atr * 2.0))
+        sl = max(20, int(atr * 2.5))
+    else:
+        tp = max(15, int(gap * 2.0))
+        sl = max(20, int(gap * 2.5))
+    # Reduced vol bonuses since ATR already captures volatility
+    if volatility_1h > 35:
         tp += 5
         sl += 8
-    elif volatility_1h > 10:
-        tp += 2
-        sl += 4
+    elif volatility_1h > 25:
+        tp += 3
+        sl += 5
+    elif volatility_1h > 15:
+        tp += 1
+        sl += 2
     return tp, sl
 
 

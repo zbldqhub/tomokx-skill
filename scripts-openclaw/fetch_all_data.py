@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 from config import (
     API_KEY, SECRET, PASSPHRASE, WORKSPACE, ENV_FILE, MAX_TOTAL, ORDER_SIZE, LEVERAGE,
     CANCEL_THRESHOLD, STOP_FILE, DAILY_LOSS_LIMIT,
-    base_gap, ensure_api_ready, classify_orders, classify_positions, calc_order_size
+    base_gap, calc_atr, ensure_api_ready, classify_orders, classify_positions, calc_order_size
 )
 
 BASE = os.environ.get("OKX_BASE_URL", "https://www.okx.com")
@@ -42,6 +42,34 @@ def _ssl_context():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
+
+
+COOLDOWN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sl_cooldown.json")
+COOLDOWN_MINUTES = 30
+
+
+def _check_sl_cooldown():
+    """Check if any side is within the post-SL cooldown period."""
+    if not os.path.exists(COOLDOWN_FILE):
+        return {}
+    try:
+        with open(COOLDOWN_FILE, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        now = datetime.now(timezone.utc)
+        result = {}
+        for side, entry in data.items():
+            last_sl = entry.get("last_sl_time", "")
+            if last_sl:
+                try:
+                    t = datetime.fromisoformat(last_sl.replace("Z", "+00:00"))
+                    elapsed = (now - t).total_seconds() / 60
+                    if elapsed < COOLDOWN_MINUTES:
+                        result[side] = {"remaining_min": round(COOLDOWN_MINUTES - elapsed, 1)}
+                except Exception:
+                    continue
+        return result
+    except Exception:
+        return {}
 
 
 def _load_env_override():
@@ -559,9 +587,8 @@ def main():
     current_price = market.get("last", 0)
     equity = balance.get("total_eq", 0) if "error" not in balance else 0
     market["account_balance"] = balance
-    market["suggested_order_size"] = calc_order_size(equity, current_price, total)
 
-    # Strategy
+    # Strategy params (needed before order_size and atr fallback)
     gap = base_gap(int(float(total)))
     vol = market.get("volatility_1h", 0)
     spread = market.get("spread", 0)
@@ -571,6 +598,12 @@ def main():
         gap += 2
     if spread > 0.5:
         gap += 1
+
+    # Calculate ATR for volatility-adaptive SL/TP
+    atr = calc_atr(market.get("candle_1h", []))
+    market["atr_1h"] = round(atr, 2) if atr else round(gap, 2)
+
+    market["suggested_order_size"] = calc_order_size(equity, current_price, total, vol)
 
     primary_trend = market.get("primary_trend", "sideways")
     trend_alignment = market.get("trend_alignment", "weak")
@@ -652,7 +685,8 @@ def main():
         "orders": orders,
         "positions": positions,
         "exposure": exposure,
-        "strategy": strategy,
+        "sl_cooldown": _check_sl_cooldown(),
+    "strategy": strategy,
         "far_orders": {"far_orders": far_orders, "threshold": _dynamic_threshold, "current_price": current_price},
         "history": history,
         "liquidity_warning": liquidity_warning,

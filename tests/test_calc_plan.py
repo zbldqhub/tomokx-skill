@@ -10,13 +10,19 @@ from calc_plan import pick_best_long_px, pick_best_short_px, calc_tp_sl_offset
 
 
 def test_calc_tp_sl_offset():
-    # Current config.py: tp=max(15,int(gap*2.0)), sl=max(20,int(gap*2.5))
-    # Vol bonuses: >10 +2/+4, >15 +5/+8, >25 +8/+10
-    assert calc_tp_sl_offset(3, 10) == (20, 25)   # tp=max(15,20)=20, sl=max(20,25)=25, vol<=10
+    # Gap-based fallback (atr=None)
+    # tp=max(15,int(gap*2.0)), sl=max(20,int(gap*2.5))
+    # Vol bonuses: >15 +1/+2, >25 +3/+5, >35 +5/+8
+    assert calc_tp_sl_offset(3, 10) == (20, 25)   # tp=max(15,20)=20, sl=max(20,25)=25, vol<=15
     assert calc_tp_sl_offset(8, 10) == (20, 25)   # same
-    assert calc_tp_sl_offset(12, 10) == (22, 29)  # vol>10 → +2/+4
-    assert calc_tp_sl_offset(18, 12) == (29, 38)  # tp=max(15,24)=24, sl=max(20,30)=30, vol>15 → +5/+8
-    assert calc_tp_sl_offset(30, 15) == (38, 47)  # tp=max(15,30)=30, sl=max(20,37)=37, vol>25 → +8/+10
+    assert calc_tp_sl_offset(12, 10) == (20, 25)  # vol=12 <=15, no bonus
+    assert calc_tp_sl_offset(18, 12) == (25, 32)  # tp=max(15,24)=24, sl=max(20,30)=30, vol>15 → +1/+2
+    assert calc_tp_sl_offset(30, 15) == (33, 42)  # tp=max(15,30)=30, sl=max(20,37)=37, vol>25 → +3/+5
+
+    # ATR-based (atr provided)
+    assert calc_tp_sl_offset(3, 10, atr=8) == (16, 20)   # tp=max(15,16)=16, sl=max(20,20)=20
+    assert calc_tp_sl_offset(18, 12, atr=8) == (17, 22)  # atr=8 → tp=16, sl=20, vol>15 → +1/+2
+    assert calc_tp_sl_offset(30, 15, atr=10) == (23, 30) # atr=10 → tp=20, sl=25, vol>25 → +3/+5
 
 
 def test_pick_best_long_px_inner():

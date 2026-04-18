@@ -2,7 +2,7 @@
 """
 Trailing / breakeven stop manager for tomokx.
 Checks live positions and their attached TP/SL algo orders.
-If unrealized profit >= 50% of TP distance, move SL to breakeven + 1 (or -1 for shorts).
+Tiered trailing: 30% profit -> breakeven, 50% -> 25% TP, 75% -> 50% TP.
 Uses direct OKX REST API calls.
 """
 import json
@@ -152,11 +152,11 @@ def main():
                 new_sl = None
                 # P4: 多层追踪止盈（独立评估所有档位，取最激进的有效值）
                 candidates = []
-                if profit_ratio >= 1.0 and sl_px < avg_px + tp_distance * 0.5:
+                if profit_ratio >= 0.75 and sl_px < avg_px + tp_distance * 0.5:
                     candidates.append(avg_px + tp_distance * 0.5)
-                if profit_ratio >= 0.75 and sl_px < avg_px + tp_distance * 0.25:
+                if profit_ratio >= 0.5 and sl_px < avg_px + tp_distance * 0.25:
                     candidates.append(avg_px + tp_distance * 0.25)
-                if profit_ratio >= 0.5 and sl_px < avg_px + 1:
+                if profit_ratio >= 0.3 and sl_px < avg_px + 1:
                     candidates.append(avg_px + 1)
                 if candidates:
                     new_sl = round(max(candidates), 2)
@@ -179,11 +179,11 @@ def main():
                 new_sl = None
                 # P4: 多层追踪止盈（独立评估所有档位，取最激进的有效值）
                 candidates = []
-                if profit_ratio >= 1.0 and sl_px > avg_px - tp_distance * 0.5:
+                if profit_ratio >= 0.75 and sl_px > avg_px - tp_distance * 0.5:
                     candidates.append(avg_px - tp_distance * 0.5)
-                if profit_ratio >= 0.75 and sl_px > avg_px - tp_distance * 0.25:
+                if profit_ratio >= 0.5 and sl_px > avg_px - tp_distance * 0.25:
                     candidates.append(avg_px - tp_distance * 0.25)
-                if profit_ratio >= 0.5 and sl_px > avg_px - 1:
+                if profit_ratio >= 0.3 and sl_px > avg_px - 1:
                     candidates.append(avg_px - 1)
                 if candidates:
                     new_sl = round(min(candidates), 2)

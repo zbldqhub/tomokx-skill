@@ -213,6 +213,13 @@ def main():
         elif short_total > long_total:
             allow_outer_short = False
 
+    # C2: SL cooldown — if a side was stopped out recently, suppress new orders
+    cooldown = strategy.get("sl_cooldown", {})
+    if "long" in cooldown:
+        target_long = 0
+    if "short" in cooldown:
+        target_short = 0
+
     # P1: 持仓再平衡——如果单侧持仓单位超过另一侧 2 倍，抑制重侧 target
     # 轻侧 boost 只在轻侧已有 target 时生效，避免 sideways/weak 时从零创造订单
     if long_total > short_total * 2:
@@ -231,7 +238,8 @@ def main():
     elif trend == "bullish" and trend_15m == "bearish":
         allow_outer_long = False
 
-    tp_offset, sl_offset = calc_tp_sl_offset(vol, gap)
+    atr = float(market.get("atr_1h", gap))
+    tp_offset, sl_offset = calc_tp_sl_offset(vol, gap, atr)
 
     cancellations = far_orders.get("far_orders", [])
     far_ord_ids = {o.get("ordId") for o in cancellations}

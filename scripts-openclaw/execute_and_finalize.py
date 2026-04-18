@@ -150,6 +150,42 @@ def count_losing_closes(bills_data):
     return count
 
 
+def _update_sl_cooldown(bills_data):
+    """Detect recent SL hits from bills and update sl_cooldown.json."""
+    cooldown_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sl_cooldown.json")
+    cooldown = {}
+    if os.path.exists(cooldown_path):
+        try:
+            with open(cooldown_path, "r", encoding="utf-8-sig") as f:
+                cooldown = json.load(f)
+        except Exception:
+            cooldown = {}
+
+    now = datetime.now(timezone.utc).isoformat()
+    updated = False
+    if isinstance(bills_data, dict) and bills_data.get("code") == "0":
+        for r in bills_data.get("data", []):
+            if r.get("instId") != "ETH-USDT-SWAP":
+                continue
+            sub = int(r.get("subType", -1))
+            # 110=SL trigger, 4=close, 6=force close, 112=liquidation
+            if sub in {4, 6, 110, 112}:
+                pnl = float(r.get("pnl", "0") or "0")
+                if pnl < 0:
+                    pos_side = r.get("posSide", "")
+                    if pos_side in ("long", "short"):
+                        cooldown[pos_side] = {"last_sl_time": now, "pnl": round(pnl, 4)}
+                        updated = True
+
+    if updated:
+        try:
+            with open(cooldown_path, "w", encoding="utf-8") as f:
+                json.dump(cooldown, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            sys.stderr.write(f"[WARN] Failed to write sl_cooldown.json: {e}\n")
+    return cooldown
+
+
 def read_stop_counter():
     if not os.path.exists(STOP_FILE):
         return 0
@@ -414,11 +450,12 @@ def main():
         "log": "",
     }
 
-    # 0. Fetch bills for PnL baseline and close previous decision
+    # 0. Fetch bills for PnL baseline, SL cooldown, and close previous decision
     bills = run_bills()
     daily_pnl = None
     if "error" not in bills:
         daily_pnl = _calc_daily_pnl(bills)
+        _update_sl_cooldown(bills)
         last_open = _read_last_open_decision()
         if last_open and daily_pnl is not None:
             baseline = last_open.get("baseline_pnl", 0)
