@@ -46,11 +46,11 @@ AI **不是交易员**，而是**审核员与仲裁者**：
 
 | 4h | 1h | 15m | 对齐度 | 最终趋势 | Long | Short |
 |----|----|-----|--------|----------|------|-------|
-| bullish | bullish | bullish | strong | Bullish | 2 | 1 |
-| bearish | bearish | bearish | strong | Bearish | 1 | 2 |
-| bullish | bullish | 任意 | moderate | Bullish | 2 | 1 |
-| bearish | bearish | 任意 | moderate | Bearish | 1 | 2 |
-| 其他组合 | - | - | mixed/weak | Sideways | 1 | 1 |
+| bullish | bullish | bullish | strong | Bullish | 4 | 1 |
+| bearish | bearish | bearish | strong | Bearish | 1 | 4 |
+| bullish | bullish | 任意 | moderate | Bullish | 3 | 1 |
+| bearish | bearish | 任意 | moderate | Bearish | 1 | 3 |
+| 其他组合 | - | - | mixed/weak | Sideways | 0 | 0 |
 
 - `strong` / `moderate`：正常执行对应 target
 - `mixed` / `weak`：**两侧 target 各 -1**（最低为 0），降低暴露，等待方向明确
@@ -79,14 +79,27 @@ AI **不是交易员**，而是**审核员与仲裁者**：
 | 11-15 | 12 |
 | 16-30 | 14 |
 
-**Gap adjustments:**
-- **ATR(14) × 0.8 dominates**: `adjusted_gap = max(base_gap, round(ATR × 0.8))`
+**ATR 动态主导:**
+- `adjusted_gap = max(base_gap, round(ATR(14) × 0.8))`
   - Low volatility → gap shrinks back to base table (more trades)
   - High volatility → gap widens automatically to protect capital
   - Soft cap: `adjusted_gap ≤ base_gap + 6` to prevent runaway gaps
-- `volatility_1h > 15` → +2 (mild boost)
+
+**Gap adjustments:**
+- `volatility_1h > 15` → +2
 - `volatility_1h > 25` → +4
 - `spread > 0.5` → +1
+
+---
+
+## TP / SL 规则
+
+- **TP**: `max(12, int(gap × 1.5))`
+- **SL**: `max(20, int(gap × 2.5))`
+- 波动率加成:
+  - `volatility_1h > 25`: TP +5, SL +8
+  - `volatility_1h > 15`: TP +3, SL +5
+  - `volatility_1h > 10`: TP +1, SL +3
 
 ---
 
@@ -164,7 +177,7 @@ AI 修改完成后，将最终计划保存为 `$env:TEMP\tomokx_plan.json`。
       "tdMode": "isolated",
       "side": "buy",
       "ordType": "limit",
-      "sz": "0.1",
+      "sz": "0.2",
       "px": "2345.41",
       "posSide": "long",
       "tpTriggerPx": "2373.41",
@@ -213,9 +226,32 @@ python "$env:USERPROFILE\.openclaw\workspace\scripts\analyze_trades.py"
 2. **禁止触碰**：`max_total`、`daily_loss_limit`、`per-side max`、`cancel_threshold`
 3. **调整幅度**：单次变动 **≤ ±2**（如 gap 不能从 8 跳到 15）
 4. **调参频率**：**≥ 7 天一次**，禁止每次交易后都改
-5. **必须记录**：任何修改都要写入 `~/.openclaw/workspace/tuning_log.jsonl`，包含修改原因、旧值、新值、报告摘要
+5. **必须记录**：任何修改都要写入 `~/.openclaw\workspace\tuning_log.jsonl`，包含修改原因、旧值、新值、报告摘要
 
 AI 在阅读周报后，若某参数的胜率/盈亏数据呈现一致性规律（至少 10+ 条闭合记录），可在上述边界内直接修改 `config.py`。
+
+---
+
+## Windows 定时任务（全自动模式）
+
+全自动模式直接调用 `run_trade_cycle.py`，内部已包含完整的 AI 审核链路（`ai_review.py` 自动 fallback 到本地 `kimi.exe`）。
+
+### 安装定时任务
+右键以管理员身份运行：
+```powershell
+"$env:USERPROFILE\.openclaw\workspace\scripts\install_trading_task_admin.bat"
+```
+
+### 卸载定时任务
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+  "$env:USERPROFILE\.openclaw\workspace\scripts\uninstall_trading_task.ps1"
+```
+
+### 立即测试
+```powershell
+Start-ScheduledTask -TaskName "tomokx-auto-trading-ai"
+```
 
 ---
 
@@ -227,7 +263,7 @@ okx swap orders --json
 okx swap positions --json
 okx account balance --json
 okx swap cancel --instId ETH-USDT-SWAP --ordId <id>
-okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordType limit --sz 0.1 --px=<px> --posSide <short|long> --tpTriggerPx=<tp> --tpOrdPx=-1 --slTriggerPx=<sl> --slOrdPx=-1
+okx swap place --instId ETH-USDT-SWAP --tdMode isolated --side <sell|buy> --ordType limit --sz 0.2 --px=<px> --posSide <short|long> --tpTriggerPx=<tp> --tpOrdPx=-1 --slTriggerPx=<sl> --slOrdPx=-1
 ```
 
 If using Clash/V2Ray proxy on Windows and OKX CLI TLS fails, run:
