@@ -8,8 +8,15 @@ logs/
 auto_trade.log
 trading/
 
-# Trading data
+# Trading data / temporary JSON outputs
 .trading_stopped
+*.json
+!events.json.example
+!scripts/rules.json
+fetch_err.txt
+fetch_out.json
+test_network.py
+tomokx_plan_final.json
 
 # OS files
 .DS_Store
