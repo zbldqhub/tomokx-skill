@@ -12,7 +12,14 @@ import urllib.request
 import base64
 import hmac
 import hashlib
+import ssl
 from datetime import datetime, timezone
+
+_ssl_ctx = ssl.create_default_context()
+if hasattr(ssl, "OP_IGNORE_UNEXPECTED_EOF"):
+    _ssl_ctx.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
+if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+    _ssl_ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready
@@ -49,7 +56,7 @@ def _request(method, path, body=None):
         with opener.open(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
     else:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
 
@@ -70,7 +77,40 @@ def get_algo_orders(ord_type="conditional"):
     return []
 
 
-def amend_algo_sl(algo_id, new_sl, ord_id=None):
+def _cancel_algo(algo_id):
+    try:
+        return _request("POST", "/api/v5/trade/cancel-algos-order", {
+            "instId": "ETH-USDT-SWAP",
+            "algoId": algo_id,
+        })
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _create_algo_sl(pos_side, sz, tp_px, new_sl):
+    """Create a new conditional TP/SL algo order for an existing position.
+    This is used as fallback when amend fails (e.g. attachAlgoOrds detached after fill)."""
+    side = "sell" if pos_side == "long" else "buy"
+    body = {
+        "instId": "ETH-USDT-SWAP",
+        "tdMode": "isolated",
+        "side": side,
+        "posSide": pos_side,
+        "ordType": "conditional",
+        "sz": str(sz),
+        "tpTriggerPx": str(tp_px),
+        "tpOrdPx": "-1",
+        "slTriggerPx": str(new_sl),
+        "slOrdPx": "-1",
+        "reduceOnly": "true",
+    }
+    try:
+        return _request("POST", "/api/v5/trade/order-algo", body)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def amend_algo_sl(algo_id, new_sl, ord_id=None, pos_side=None, sz=None, tp_px=None):
     # Strategy 1: amend-algos-order for standalone conditional/oco algo orders
     try:
         return _request("POST", "/api/v5/trade/amend-algos-order", {
@@ -78,8 +118,8 @@ def amend_algo_sl(algo_id, new_sl, ord_id=None):
             "algoId": algo_id,
             "newSlTriggerPx": str(new_sl),
         })
-    except Exception:
-        pass
+    except Exception as e:
+        err1 = str(e)
 
     # Strategy 2: amend-order for attached TP/SL (attachAlgoOrds)
     if ord_id:
@@ -89,8 +129,18 @@ def amend_algo_sl(algo_id, new_sl, ord_id=None):
                 "ordId": ord_id,
                 "newSlTriggerPx": str(new_sl),
             })
-        except Exception:
-            pass
+        except Exception as e:
+            err2 = str(e)
+
+    # Strategy 3: cancel old algo + recreate new conditional order
+    if pos_side and sz and tp_px:
+        cancel_res = _cancel_algo(algo_id)
+        create_res = _create_algo_sl(pos_side, sz, tp_px, new_sl)
+        return {
+            "method": "cancel_recreate",
+            "cancel_result": cancel_res,
+            "create_result": create_res,
+        }
 
     return {"skipped": True, "reason": "amend not applicable (algo may be triggered or detached)"}
 
@@ -160,7 +210,7 @@ def main():
                     candidates.append(avg_px + 1)
                 if candidates:
                     new_sl = round(max(candidates), 2)
-                    res = amend_algo_sl(target_algo["algoId"], new_sl, target_algo.get("ordId"))
+                    res = amend_algo_sl(target_algo["algoId"], new_sl, target_algo.get("ordId"), pos_side, sz, tp_px)
                     updates.append({
                         "posSide": "long",
                         "algoId": target_algo["algoId"],
@@ -187,7 +237,7 @@ def main():
                     candidates.append(avg_px - 1)
                 if candidates:
                     new_sl = round(min(candidates), 2)
-                    res = amend_algo_sl(target_algo["algoId"], new_sl, target_algo.get("ordId"))
+                    res = amend_algo_sl(target_algo["algoId"], new_sl, target_algo.get("ordId"), pos_side, sz, tp_px)
                     updates.append({
                         "posSide": "short",
                         "algoId": target_algo["algoId"],

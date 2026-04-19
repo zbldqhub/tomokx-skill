@@ -9,10 +9,20 @@ import json
 import time
 import subprocess
 import urllib.request
+import ssl
 from datetime import datetime, timezone, timedelta
+
+_ssl_ctx = ssl.create_default_context()
+if hasattr(ssl, "OP_IGNORE_UNEXPECTED_EOF"):
+    _ssl_ctx.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
+if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+    _ssl_ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
 
 from config import ENV_FILE, LOG_PATH, JSONL_PATH, DECISION_LOG_PATH, ORDER_TRACKING_PATH, STOP_FILE, API_KEY, SECRET, PASSPHRASE, BASE_URL, ensure_api_ready, MAX_TOTAL, ORDER_SIZE
 import base64, hmac, hashlib
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 # Auto-detect platform source label
@@ -118,7 +128,7 @@ def fetch_okx(path):
             return json.loads(resp.read().decode("utf-8"))
     else:
         req = urllib.request.Request(BASE_URL + path, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
 
@@ -130,10 +140,14 @@ def run_bills():
     begin_ms = int(begin.timestamp() * 1000)
     end_ms = int(end.timestamp() * 1000)
     path = f"/api/v5/account/bills?instType=SWAP&instId=ETH-USDT-SWAP&begin={begin_ms}&end={end_ms}&limit=100"
-    try:
-        return fetch_okx(path)
-    except Exception as e:
-        return {"error": str(e)}
+    for attempt in range(3):
+        try:
+            return fetch_okx(path)
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                return {"error": str(e)}
 
 
 def count_losing_closes(bills_data):
@@ -552,7 +566,20 @@ def main():
         _append_order_tracking(plan, decision_id)
         print("[ORDER_TRACKING] Appended placements")
 
-    # 4. Stop counter disabled; only daily loss limit is enforced
+    # 4. Stop counter ( informational — daily loss limit is the hard stop )
+    previous_stop = read_stop_counter()
+    losing_closes = count_losing_closes(bills) if "error" not in bills else 0
+    new_stop = previous_stop + losing_closes
+    if new_stop != previous_stop:
+        write_stop_counter(new_stop)
+    should_stop = summary.get("should_stop", False)
+    result["stop_counter"] = {
+        "previous": previous_stop,
+        "written": new_stop,
+        "losing_closes_today": losing_closes,
+        "should_stop": should_stop,
+    }
+    print(f"[STOP_COUNTER] {previous_stop} -> {new_stop} (losing_closes_today={losing_closes}, should_stop={should_stop})")
 
     # 5. Log trade
     log_msg = log_trade(summary)

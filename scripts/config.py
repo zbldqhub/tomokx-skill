@@ -5,6 +5,16 @@ Loads environment variables and exposes all strategy constants.
 """
 import os
 import sys
+import ssl
+
+# Patch ssl.create_default_context to add OP_LEGACY_SERVER_CONNECT for OKX API compatibility
+if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+    _orig_create_default_context = ssl.create_default_context
+    def _patched_create_default_context(*args, **kwargs):
+        ctx = _orig_create_default_context(*args, **kwargs)
+        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+        return ctx
+    ssl.create_default_context = _patched_create_default_context
 
 # Workspace paths
 WORKSPACE = os.path.expanduser("~/.openclaw/workspace")

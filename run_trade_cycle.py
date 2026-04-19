@@ -34,12 +34,19 @@ def run(cmd, *args):
         if stripped.startswith("{") or stripped.startswith("["):
             candidates.append("\n".join(lines[i:]))
             break
-    # Fallback: find first '{' or '[' character position in raw string
+    # Fallback: find the last JSON-like block (handles trailing log lines with braces)
     for marker in ("{", "["):
-        pos = stdout.find(marker)
-        if pos != -1:
-            candidates.append(stdout[pos:])
-            break
+        # Search from the end for a line-start marker
+        for line in reversed(lines):
+            stripped = line.strip()
+            if stripped.startswith(marker):
+                candidates.append("\n".join(lines[lines.index(line):]))
+                break
+        else:
+            # Last resort: find last occurrence of marker in raw string
+            pos = stdout.rfind(marker)
+            if pos != -1:
+                candidates.append(stdout[pos:])
     for candidate in candidates:
         try:
             data = json.loads(candidate)

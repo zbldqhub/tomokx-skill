@@ -41,6 +41,8 @@ def _ssl_context():
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
     return ctx
 
 
@@ -92,7 +94,7 @@ def run_script(name, *args):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     cmd = [sys.executable, os.path.join(script_dir, name)] + list(args)
     t0 = time.time()
-    r = __import__("subprocess").run(cmd, capture_output=True, text=True, timeout=60, env=env)
+    r = __import__("subprocess").run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
     elapsed_ms = round((time.time() - t0) * 1000, 1)
     diag = {
         "script": name,
@@ -720,4 +722,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     main()
